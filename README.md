@@ -15,6 +15,11 @@ Then press `a` for an Android emulator, `i` for an iOS simulator, or scan the QR
 Expo Go. Every native module here ships inside Expo Go, so no custom dev build is needed to
 develop. `npx tsc --noEmit` typechecks.
 
+Press `w` (or run `npm run web`) to drive the whole HUD from a browser on
+<http://localhost:8081> — handy for working without a phone or emulator. Web has no
+`react-native-webview`, so `src/components/CameraView.web.tsx` renders the MJPEG stream in a
+plain `<img>` instead.
+
 On Windows PowerShell, `npx expo start` may fail with "running scripts is disabled". Use
 `npx.cmd expo start` instead, or allow signed local scripts once with
 `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`.
@@ -25,7 +30,7 @@ camera at `192.168.4.2:81`.
 ## Switch off mock mode
 
 Mock mode is on by default. Turn it off in **`src/config.ts`**:
-
+4
 ```ts
 export const USE_MOCK = false; // true = no network, faked status + placeholder camera
 ```
