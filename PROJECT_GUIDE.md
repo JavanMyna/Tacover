@@ -163,10 +163,47 @@ npx expo start -c        # PowerShell: npx.cmd expo start -c
 
 ```bash
 npm install
-npx expo start           # a = Android emulator, i = iOS simulator, w = browser, QR = Expo Go
+npx expo start           # a = Android emulator, i = iOS simulator (macOS only), w = browser,
+                         # QR = Expo Go on any number of physical phones
 npx tsc --noEmit         # typecheck
-npx expo lint            # lint
 ```
+
+`npx expo start` is the dev-server workflow: it serves the JS bundle to Expo Go / the browser /
+an emulator, and one server can feed several devices at once. **`npx expo run` is a different
+thing** — it asks for a platform because it compiles and installs a *local native build* of the
+app, which needs a real toolchain (JDK, Android SDK, `adb` / Xcode). Picking Android there
+without a toolchain is the source of the *"Failed to resolve the Android SDK path"* +
+*"'adb' is not recognized"* errors; `expo run` is never needed for this project, since every
+native module it uses already ships inside Expo Go.
+
+### 6.1 Prerequisites by target
+
+| Target | Install on the laptop |
+| --- | --- |
+| Browser (fastest) | nothing — `npm run web` |
+| Android phone + Expo Go | nothing |
+| iPhone + Expo Go | nothing (App Store → Expo Go) |
+| Android **emulator** | JDK 17 + Android Studio + SDK Platform 36 (Android 16 "Baklava") + Build-Tools + Platform-Tools + Android Emulator, then `ANDROID_HOME` and `Path`, then an AVD |
+| iOS simulator / local iOS build | impossible on Windows — macOS + Xcode only |
+| Local native dev build (`expo run:*`) | JDK 17 + Android Studio SDK + `adb` (Windows); Xcode (macOS) |
+| Installable APK / iOS build | nothing local — EAS cloud (`npx eas-cli@latest build`) |
+
+Android emulator setup on Windows (per the Expo "set up your environment" docs):
+
+```powershell
+winget install Microsoft.OpenJDK.17          # or: choco install -y microsoft-openjdk17
+```
+
+then install [Android Studio](https://developer.android.com/studio) → *Standard* setup; in
+**SDK Manager** add *Android SDK Platform 36*, *Build-Tools*, *Platform-Tools*, *Android
+Emulator*; set a user env var `ANDROID_HOME=C:\Users\<you>\AppData\Local\Android\Sdk` and add
+`%ANDROID_HOME%\platform-tools` and `%ANDROID_HOME%\emulator` to `Path`; reopen the terminal;
+create an AVD in **Device Manager**. Then `npx expo start` → `a` (Expo CLI installs Expo Go into
+the emulator itself). JDK 17 is only strictly needed for Gradle/`expo run` builds — the
+emulator + Expo Go path needs the SDK/tools, but installing the JDK now avoids the next wall.
+
+`npx expo lint` currently fails with *"Cannot find module 'eslint'"* — this repo has no ESLint
+configured, so treat `tsc --noEmit` as the check.
 
 Mock mode is on out of the box, so a first run needs no hardware. To exercise failure paths,
 set `MOCK_FAILURE_RATE` in `src/robot/mock.ts` above `0`.
@@ -220,8 +257,8 @@ Three options:
 **A. Android emulator.** Requires an Android SDK + AVD (`ANDROID_HOME`). Not installed on
 this machine: `ANDROID_HOME` is unset, `%LOCALAPPDATA%\Android` does not exist, no Android
 Studio — so `npx expo start` → `a` fails with *"Failed to resolve the Android SDK path"* and
-*"'adb' is not recognized"*. Install Android Studio (multi-GB) if you want this path.
-Once it exists: `npx expo start` → `a`.
+*"'adb' is not recognized"*. See §6.1 for the exact install list; once the SDK exists:
+`npx expo start` → `a`.
 - Mock mode works fully.
 - With `USE_MOCK = false` **and the laptop joined to the ESP32's AP**, the emulator reaches
   `192.168.4.1` through the host's network, so you can drive/test the real car from the laptop.
@@ -341,7 +378,9 @@ Related concepts also present, each with a concrete use:
   on link `offline`, and on unmount — four independent paths, so no single missed event can leave
   the car driving.
 - **Backpressure / in-flight dedupe.** `client.ts:63` keeps a module-level `inFlight` direction
-  and skips re-sending the same direction while the previous request is still open.
+  and skips re-sending the same direction while the previous request is still open. The release
+  is bounded: the request is aborted after `MOVE_TIMEOUT_MS`, so a silent robot cannot pin the
+  guard open and swallow later presses of that direction.
 - **WebView ↔ native `postMessage` bridge.** `src/robot/camera.ts` injects a page whose `<script>`
   polls `img.naturalWidth` and posts `{type:'playing'|'error'}` back to RN; also an 8-second
   watchdog. `CameraView.tsx` memoizes the `source` object so the WebView is not reloaded each
@@ -357,15 +396,22 @@ Related concepts also present, each with a concrete use:
 
 Factual notes from reading the source, worth knowing before the hardware arrives:
 
-1. `MOVE_TIMEOUT_MS` (`config.ts:53`) is exported and imported by `client.ts:5` but **never
-   used** — `sendMove` fires `fetch` with no timeout, unlike `getJson`. Consequence: if a
-   `/move` request hangs without settling, `inFlight` stays set to that direction, and the next
-   press of the *same* direction is silently dropped (`client.ts:70`) until the socket resolves.
-   Pressing another direction (e.g. `S`) still goes through immediately.
-2. The camera on iOS may require tapping **Retry** (WKWebView + multipart MJPEG); Android is
+1. The camera on iOS may require tapping **Retry** (WKWebView + multipart MJPEG); Android is
    reliable. Telemetry and driving are unaffected.
-3. No runtime configuration UI, no persistence (speed resets to `DEFAULT_SPEED` on relaunch),
+2. No runtime configuration UI, no persistence (speed resets to `DEFAULT_SPEED` on relaunch),
    no navigation — the repo's `AGENTS.md` routing guidance refers to a multi-screen structure
    this app does not have yet.
-4. Mock mode is the default (`USE_MOCK = true`); forgetting to flip it looks exactly like a
+3. Mock mode is the default (`USE_MOCK = true`); forgetting to flip it looks exactly like a
    working robot, except the header shows the purple `MOCK` badge.
+4. `app.json` sets `userInterfaceStyle: "dark"`. A local `expo prebuild` / `expo run` warns
+   *"Install expo-system-ui in your project to enable this feature"* — only native dev/release
+   builds care (Expo Go and web ignore it, and the UI is dark anyway). Add it with
+   `npx expo install expo-system-ui` if you ever build a dev client.
+
+Previously item 1 in this list was a real bug: `MOVE_TIMEOUT_MS` was declared and imported but
+never used, so `sendMove`'s `inFlight` guard could be pinned open forever by a `/move` request
+that never answered — repeats of that one direction were then silently dropped while other
+directions still worked. Fixed in `src/robot/client.ts` (AbortController bounded by
+`MOVE_TIMEOUT_MS`, released in `finally`). Measured, against a local server: a silent robot gave
+1 request per 2 s hold before and 3 after; a slow-but-answering robot gives 4, i.e. the
+skip-while-in-flight behaviour is still intact.
