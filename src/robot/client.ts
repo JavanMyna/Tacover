@@ -73,9 +73,14 @@ export function sendMove(dir: MoveDir, speed: number): void {
   const url = `${MOVE_URL}?${MOVE_PARAMS.direction}=${dir}&${MOVE_PARAMS.speed}=${clamped}`;
 
   inFlight = dir;
-  fetch(url, { method: 'GET', headers: { Accept: '*/*' } })
+  // Same AbortController pattern as getJson: a silent robot must not be able to
+  // pin `inFlight` open, or repeats of this direction would be skipped forever.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MOVE_TIMEOUT_MS);
+  fetch(url, { method: 'GET', headers: { Accept: '*/*' }, signal: controller.signal })
     .catch(() => undefined)
-    .then(() => {
+    .finally(() => {
+      clearTimeout(timer);
       if (inFlight === dir) inFlight = null;
     });
 }
