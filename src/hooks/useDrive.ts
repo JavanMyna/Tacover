@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { REPEAT_INTERVAL_MS } from '../config';
-import { sendMove } from '../robot/client';
+import { sendMove, sendStop } from '../robot/client';
 import { DriveDir } from '../robot/types';
 import { LinkState } from './useRobotStatus';
 
@@ -38,7 +38,7 @@ export function useDrive(speed: number, link: LinkState): Drive {
     loopRef.current += 1;
     activeRef.current = null;
     setActive(null);
-    sendMove('S', speedRef.current);
+    sendStop(speedRef.current);
   }, []);
 
   const press = useCallback((dir: DriveDir) => {
@@ -82,7 +82,7 @@ export function useDrive(speed: number, link: LinkState): Drive {
     () => () => {
       loopRef.current += 1;
       activeRef.current = null;
-      sendMove('S', speedRef.current);
+      sendStop(speedRef.current);
     },
     [],
   );

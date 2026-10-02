@@ -5,7 +5,6 @@ import { LinkState } from '../hooks/useRobotStatus';
 import { RobotStatus } from '../robot/types';
 import { colors, eyebrow, fonts } from '../theme';
 import { Panel } from './Panel';
-import { WarningBanner } from './WarningBanner';
 
 type Props = { status: RobotStatus | null; link: LinkState };
 
@@ -15,7 +14,6 @@ export const LivePanel = memo(function LivePanel({ status, link }: Props) {
 
   return (
     <View style={styles.wrap}>
-      {near ? <WarningBanner distance={status.distance} /> : null}
       <Panel
         title="Telemetry"
         sub={link === 'online' ? 'live · 1 s' : 'no data'}

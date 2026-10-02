@@ -9,7 +9,8 @@ import { LivePanel } from './src/components/LivePanel';
 import { SpeedSlider } from './src/components/SpeedSlider';
 import { StarField } from './src/components/StarField';
 import { TempChart } from './src/components/TempChart';
-import { DEFAULT_SPEED, USE_MOCK } from './src/config';
+import { WarningBanner } from './src/components/WarningBanner';
+import { DEFAULT_SPEED, OBSTACLE_WARNING_CM, USE_MOCK } from './src/config';
 import { useDrive } from './src/hooks/useDrive';
 import { useRobotStatus } from './src/hooks/useRobotStatus';
 import { colors, eyebrow, fonts, radius } from './src/theme';
@@ -41,8 +42,11 @@ function Cockpit() {
 
   const speedControl = <SpeedSlider value={speed} onChange={setSpeed} disabled={!drive.enabled} />;
 
+  const near = status !== null && status.distance <= OBSTACLE_WARNING_CM;
+
   const pad = (
     <>
+      {near && status !== null ? <WarningBanner distance={status.distance} /> : null}
       <DPad active={drive.active} enabled={drive.enabled} onPressIn={drive.press} onPressOut={drive.release} />
       {drive.enabled ? null : <Text style={styles.lockout}>Drive locked · no telemetry link</Text>}
     </>
@@ -86,9 +90,13 @@ function Cockpit() {
           >
             {telemetry}
           </ScrollView>
-          <View style={styles.colCenter}>
+          <ScrollView
+            style={styles.colCenter}
+            contentContainerStyle={styles.padContent}
+            showsVerticalScrollIndicator={false}
+          >
             <View style={styles.padSquare}>{pad}</View>
-          </View>
+          </ScrollView>
         </View>
       ) : (
         <ScrollView
@@ -144,11 +152,12 @@ const styles = StyleSheet.create({
   colCamera: { flex: 1.25, gap: 12 },
   colGrow: { flex: 1 },
   colContent: { gap: 12 },
-  colCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  colCenter: { flex: 1 },
+  padContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
 
   cameraFlex: { flex: 1 },
   cameraPortrait: { height: 230 },
-  padSquare: { width: '100%' },
+  padSquare: { width: '100%', gap: 10 },
 
   lockout: {
     fontFamily: fonts.mono,

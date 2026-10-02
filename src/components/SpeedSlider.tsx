@@ -63,9 +63,12 @@ export const SpeedSlider = memo(function SpeedSlider({ value, onChange, disabled
         }}
         {...responder.panHandlers}
       >
-        <View style={styles.rail} />
-        <View style={[styles.fill, { width: `${ratio * 100}%` }]} />
-        <View style={[styles.knob, { left: ratio * Math.max(0, trackWidth - KNOB) }, glow(colors.cyan, 12, 0.9)]} />
+        <View pointerEvents="none" style={styles.rail} />
+        <View pointerEvents="none" style={[styles.fill, { width: `${ratio * 100}%` }]} />
+        <View
+          pointerEvents="none"
+          style={[styles.knob, { left: ratio * Math.max(0, trackWidth - KNOB) }, glow(colors.cyan, 12, 0.9)]}
+        />
       </View>
 
       <View style={styles.scale}>

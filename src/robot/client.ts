@@ -4,6 +4,7 @@ import {
   MOVE_PARAMS,
   MOVE_TIMEOUT_MS,
   MOVE_URL,
+  REPEAT_INTERVAL_MS,
   STATUS_TIMEOUT_MS,
   STATUS_URL,
   USE_MOCK,
@@ -62,13 +63,15 @@ export async function fetchStatus(): Promise<StatusResult> {
  */
 let inFlight: MoveDir | null = null;
 
-export function sendMove(dir: MoveDir, speed: number): void {
-  if (USE_MOCK) {
-    mockMove(dir, speed);
-    return;
-  }
-  if (inFlight === dir) return;
+/**
+ * Bumped by every command. Pending stop repeats capture the value at schedule
+ * time and abandon themselves if it has moved on, so a stop that is followed
+ * quickly by a new move cannot kill that new movement.
+ */
+let commandGeneration = 0;
 
+/** Fire one GET /move and update inFlight; never de-duplicates. */
+function dispatchMove(dir: MoveDir, speed: number): void {
   const clamped = Math.max(MIN_SPEED, Math.min(MAX_SPEED, Math.round(speed)));
   const url = `${MOVE_URL}?${MOVE_PARAMS.direction}=${dir}&${MOVE_PARAMS.speed}=${clamped}`;
 
@@ -83,4 +86,37 @@ export function sendMove(dir: MoveDir, speed: number): void {
       clearTimeout(timer);
       if (inFlight === dir) inFlight = null;
     });
+}
+
+export function sendMove(dir: MoveDir, speed: number): void {
+  if (USE_MOCK) {
+    mockMove(dir, speed);
+    return;
+  }
+  // Any newer command invalidates stop repeats already queued.
+  commandGeneration += 1;
+  if (inFlight === dir) return;
+  dispatchMove(dir, speed);
+}
+
+/**
+ * Safety stop. dir=S goes out immediately and again after roughly 100 ms and
+ * 200 ms, because a single lost GET would leave the car driving. Each attempt
+ * bypasses the inFlight de-duplication, and the delayed repeats are cancelled
+ * the moment any newer move command is sent.
+ */
+export function sendStop(speed: number): void {
+  if (USE_MOCK) {
+    mockMove('S', speed);
+    return;
+  }
+  commandGeneration += 1;
+  const generation = commandGeneration;
+  dispatchMove('S', speed);
+  for (const attempt of [1, 2]) {
+    setTimeout(() => {
+      if (commandGeneration !== generation) return;
+      dispatchMove('S', speed);
+    }, attempt * REPEAT_INTERVAL_MS);
+  }
 }

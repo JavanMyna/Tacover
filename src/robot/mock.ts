@@ -41,9 +41,7 @@ export function mockShouldFail(): boolean {
 }
 
 export function mockDelay(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, MOCK_LATENCY_MS);
-  return promise;
+  return new Promise<void>((resolve) => setTimeout(resolve, MOCK_LATENCY_MS));
 }
 
 export function mockMove(dir: MoveDir, speed: number): void {
