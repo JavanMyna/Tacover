@@ -9,10 +9,10 @@ export const colors = {
   edge: '#1D2750',
   edgeBright: '#2E3D78',
 
-  cyan: '#45E0FF',
-  cyanSoft: '#1B7E99',
-  purple: '#A56BFF',
-  purpleSoft: '#573390',
+  cyan: '#4FC8E0',
+  cyanSoft: '#2A6F82',
+  purple: '#9A7BD1',
+  purpleSoft: '#4C3A73',
 
   ok: '#3DFFA2',
   warn: '#FFC24B',
@@ -31,13 +31,19 @@ export const fonts = {
 
 export const radius = { sm: 10, md: 16, lg: 24, pill: 999 } as const;
 
-/** Neon halo: iOS uses a shadow, Android needs elevation for the same read. */
-export const glow = (color: string, r = 14, opacity = 0.75): ViewStyle => ({
+/**
+ * Global dial on the neon halo — lower it to calm the whole HUD down at once,
+ * since every call site passes its own radius and opacity through here. iOS
+ * uses a shadow, Android needs elevation for the same read.
+ */
+const GLOW_SCALE = 0.6;
+
+export const glow = (color: string, r = 12, opacity = 0.7): ViewStyle => ({
   shadowColor: color,
-  shadowOpacity: opacity,
-  shadowRadius: r,
+  shadowOpacity: opacity * GLOW_SCALE,
+  shadowRadius: r * GLOW_SCALE,
   shadowOffset: { width: 0, height: 0 },
-  elevation: Math.max(2, Math.round(r / 3)),
+  elevation: Math.max(1, Math.round((r * GLOW_SCALE) / 3)),
 });
 
 /** Small uppercase eyebrow used for every panel title and data label. */

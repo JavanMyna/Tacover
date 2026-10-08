@@ -15,16 +15,20 @@ One screen, two layouts:
 
 | Panel | What it does |
 | --- | --- |
-| Header | brand, `MOCK` badge when mock mode is on, connection pill |
-| Camera | MJPEG live feed (Android reliably, iOS hit-or-miss) |
-| Telemetry | temperature / humidity / obstacle distance |
-| Temperature trend | hand-drawn SVG line chart of the last 60 readings |
+| Header row | menu button (opens the drawer) + connection dot (`useRobotStatus` link state) |
 | Speed | 0–255 slider, `PanResponder` based, no dependency |
-| D-pad | hold-to-drive; release / background / link loss all stop the car |
-| Warning banner | appears at ≤ 15 cm |
+| D-pad | hold-to-drive; release / background / link loss / drawer open all stop the car |
+| Camera (drawer) | `Show camera` switch for the floating feed — off on every launch |
+| Telemetry (drawer) | temperature / humidity / obstacle distance |
+| Temperature trend (drawer) | hand-drawn SVG line chart of the last 60 readings |
+| Settings (drawer) | robot IP, camera IP, mock switch, reset to defaults — persisted |
+| Floating camera | MJPEG feed over the controls (Android reliably, iOS hit-or-miss) |
+| Edge glow | soft red band around the screen edges at ≤ 15 cm |
 
-Landscape is the intended orientation (camera+speed | telemetry | D-pad); portrait stacks the
-same panels in a scroll column (`App.tsx:71-131`).
+The default screen shows only the slider, the D-pad, the menu button and the dot, and never
+scrolls. Landscape puts the slider on the left and the D-pad on the right; portrait stacks the
+slider above the D-pad, which sits in the lower half (`App.tsx`). Everything else slides in from
+the left in a drawer.
 
 ---
 
@@ -41,15 +45,19 @@ From `package.json`:
 | `react-native-svg` | `15.15.4` | D-pad chevrons, temperature chart |
 | `react-native-webview` | `13.16.1` | MJPEG camera feed |
 | `react-native-safe-area-context` | `~5.7.0` | notches / gesture bars |
+| `@react-native-async-storage/async-storage` | `2.2.0` | persists the settings store |
 | `expo-build-properties` | `~57.0.22` | sets `usesCleartextTraffic: true` on Android |
 | `expo-status-bar` | `~57.0.1` | light status bar |
 
 Notes:
 
 - **No navigation library.** `AGENTS.md` prescribes Expo Router, but this app is a single
-  screen and does not use it — there is no `src/app/` directory and no `expo-router` dep.
+  screen and does not use it — there is no `src/app/` directory and no `expo-router` dep. The
+  drawer is a plain animated `View`, not a navigator.
 - **No state library, no HTTP library, no slider/chart library.** State is `useState`/`useRef`
-  in hooks; HTTP is `fetch` + `AbortController`; slider and chart are hand-rolled.
+  in hooks plus one small context (`src/settings.tsx`) for the persisted settings; HTTP is
+  `fetch` + `AbortController`; slider and chart are hand-rolled. Animations use React Native's
+  own `Animated` (the drawer slide, the edge-glow fade) — Reanimated is not a dependency.
 - **Web target is installed but has no WebView.** `react-dom`, `react-native-web` and
   `@expo/metro-runtime` are present, so `npm run web` runs the whole HUD in a browser;
   `react-native-webview` has no web implementation, so `src/components/CameraView.web.tsx`
@@ -64,15 +72,16 @@ Notes:
 
 ```
 index.ts                     registerRootComponent(App)
-App.tsx                      orientation-aware layout + wiring of hooks to panels
+App.tsx                      minimal cockpit: header row, slider + D-pad, drawer wiring
 app.json                     Expo config: orientation, cleartext, bundle ids, iOS ATS
 eas.json                     EAS build profiles (preview = APK, production = AAB)
-src/config.ts                *** every address, tunable, and wire-format name ***
+src/config.ts                *** every address, tunable, wire-format name, default setting ***
+src/settings.tsx             live settings context: AsyncStorage load/save, IPv4 check
 src/theme.ts                 palette, mono/sans fonts, glow() helper, eyebrow style
 
 src/robot/
   types.ts                   MoveDir ('F'|'B'|'L'|'R'|'S'), RobotStatus, parseStatus()
-  client.ts                  fetchStatus() / sendMove(); timeouts; never throws
+  client.ts                  fetchStatus() / sendMove() / sendStop(); configureRobot()
   mock.ts                    random-walk fake telemetry, MOCK_FAILURE_RATE, latency
   camera.ts                  buildStreamHtml() — the page loaded into the WebView
 
@@ -81,8 +90,9 @@ src/hooks/
   useDrive.ts                hold-to-repeat driving + every safety stop
 
 src/components/
-  DPad.tsx  SpeedSlider.tsx  CameraView.tsx  LivePanel.tsx  TempChart.tsx
-  WarningBanner.tsx  ConnectionIndicator.tsx  Panel.tsx  StarField.tsx
+  HamburgerButton.tsx  StatusDot.tsx  DPad.tsx  SpeedSlider.tsx
+  Drawer.tsx  SettingsPanel.tsx  FloatingCamera.tsx  EdgeGlow.tsx
+  CameraView.tsx  LivePanel.tsx  TempChart.tsx  Panel.tsx  StarField.tsx
   CameraView.web.tsx         web-only camera panel (Metro platform resolution)
 ```
 
@@ -90,15 +100,19 @@ Data flow:
 
 ```mermaid
 graph LR
-  A[useRobotStatus: 1s poll] -->|link, status, history| B[LivePanel / TempChart / ConnectionIndicator]
+  S[settings.tsx: AsyncStorage] -->|configureRobot useMock/IP| F
+  S -->|useMock, robotIp| A
+  A[useRobotStatus: 1s poll] -->|link, status, history| B[StatusDot / Drawer: LivePanel, TempChart]
   A -->|link| C[useDrive]
   D[DPad press/release] --> C
   E[SpeedSlider] --> C
+  M[Drawer opens] -->|stop| C
   C -->|sendMove F/B/L/R/S| F[client.ts fetch]
   A -->|fetchStatus| F
-  F -->|USE_MOCK| G[mock.ts]
-  F -->|USE_MOCK=false| H[ESP32 192.168.4.1]
-  I[CameraView -> WebView img] --> J[192.168.4.2:81/stream]
+  F -->|useMock| G[mock.ts]
+  F -->|useMock=false, live robotIp| H[ESP32]
+  I[CameraView -> WebView img] --> J[cameraIp:81/stream]
+  S -->|cameraIp, useMock| I
 ```
 
 ---
@@ -121,8 +135,9 @@ GET http://192.168.4.2:81/stream                           # multipart/x-mixed-r
 - `/status` is polled every 1000 ms with a 2000 ms timeout; 2 consecutive failures flip the
   link to `offline` (`FAILURES_BEFORE_OFFLINE`), which locks out the D-pad and force-sends `S`.
 - Field/param **names** are remappable without touching any other file: `STATUS_FIELDS` and
-  `MOVE_PARAMS` in `src/config.ts`. Endpoint *paths* are built in the same file
-  (`MOVE_URL`, `STATUS_URL`, `CAMERA_STREAM_PATH`).
+  `MOVE_PARAMS` in `src/config.ts`. Endpoint *paths* are built in the same file, as functions of
+  the live IP (`MOVE_URL(ip)`, `STATUS_URL(ip)`, `CAMERA_STREAM_URL(ip)`, `CAMERA_STREAM_PATH`),
+  so an address edited in the drawer takes effect on the next request.
 - `parseStatus()` (`src/robot/types.ts:20-45`) accepts numbers **or numeric strings**, and
   returns `null` for a malformed payload so a firmware change shows as "Unexpected /status
   payload" instead of `NaN` on screen.
@@ -135,23 +150,33 @@ GET http://192.168.4.2:81/stream                           # multipart/x-mixed-r
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `USE_MOCK` | `true` | fake all robot I/O, no network |
-| `ROBOT_IP` / `ROBOT_PORT` | `192.168.4.1` / `80` | drive + telemetry board |
-| `CAMERA_IP` / `CAMERA_PORT` | `192.168.4.2` / `81` | MJPEG host |
+| `USE_MOCK` | `true` | fake all robot I/O, no network (seed for the drawer switch) |
+| `ROBOT_IP` / `ROBOT_PORT` | `192.168.4.1` / `80` | drive + telemetry board (seed for Settings) |
+| `CAMERA_IP` / `CAMERA_PORT` | `192.168.4.2` / `81` | MJPEG host (seed for Settings) |
 | `CAMERA_STREAM_PATH` | `/stream` | MJPEG path |
 | `MIN_SPEED` / `MAX_SPEED` / `DEFAULT_SPEED` | 0 / 255 / 150 | slider range |
 | `REPEAT_INTERVAL_MS` | `100` | resend cadence while held |
 | `STATUS_POLL_MS` | `1000` | `/status` cadence |
 | `STATUS_TIMEOUT_MS` | `2000` | slow answer = failure |
-| `MOVE_TIMEOUT_MS` | `800` | *defined and imported but unused — see §9* |
+| `MOVE_TIMEOUT_MS` | `800` | bounds an in-flight `/move`, so the dedupe guard cannot stick |
 | `FAILURES_BEFORE_OFFLINE` | `2` | failed polls before red link |
-| `OBSTACLE_WARNING_CM` | `15` | red banner threshold |
+| `OBSTACLE_WARNING_CM` | `15` | edge-glow threshold |
 | `HISTORY_SIZE` | `60` | chart samples |
+| `CAMERA_BOX_DEFAULT_WIDTH` | `240` | floating camera width (4:3 aspect preserved) |
+| `CAMERA_BOX_MIN_WIDTH` | `140` | smallest floating camera |
+| `CAMERA_BOX_MAX_WIDTH_RATIO` / `..._HEIGHT_RATIO` | `0.5` / `0.45` | resize caps, as a share of the screen |
+| `SETTINGS_STORAGE_KEY` | `tacover.settings.v1` | AsyncStorage key for the settings blob |
 | `STATUS_FIELDS` | `temp` / `humidity` / `distance` | JSON key mapping |
 | `MOVE_PARAMS` | `dir` / `speed` | query-param mapping |
 
-There is **no settings screen in the app** — no `TextInput`/form exists anywhere in the
-source. Configuration = edit the file, then restart Metro with a cleared cache:
+**Runtime settings live in the drawer** (`src/settings.tsx`): robot IP, camera IP, mock mode,
+plus the floating camera's size and size-lock. They are written to AsyncStorage on every change
+and read back *before the first `/status` poll*, so a changed address or the mock switch applies
+immediately without a restart; `Reset to defaults` restores everything above. `src/config.ts`
+stays the single source of **default** values — changing a default there only affects a fresh
+install (or a reset), not an install that has already saved settings. The remaining knobs
+(speeds, timings, wire-format names, camera-box clamps) are still file-only: edit and restart
+Metro with a cleared cache.
 
 ```bash
 npx expo start -c        # PowerShell: npx.cmd expo start -c
@@ -202,8 +227,9 @@ create an AVD in **Device Manager**. Then `npx expo start` → `a` (Expo CLI ins
 the emulator itself). JDK 17 is only strictly needed for Gradle/`expo run` builds — the
 emulator + Expo Go path needs the SDK/tools, but installing the JDK now avoids the next wall.
 
-`npx expo lint` currently fails with *"Cannot find module 'eslint'"* — this repo has no ESLint
-configured, so treat `tsc --noEmit` as the check.
+`npx expo lint` is not usable here: it self-installs `eslint` + `eslint-config-expo` into
+`package.json` and writes `eslint.config.js`, then dies with *"Cannot find module 'eslint'"* in
+this environment. The repo has no ESLint configured, so treat `tsc --noEmit` as the check.
 
 Mock mode is on out of the box, so a first run needs no hardware. To exercise failure paths,
 set `MOCK_FAILURE_RATE` in `src/robot/mock.ts` above `0`.
@@ -270,9 +296,15 @@ npm run web        # = npx expo start --web; opens http://localhost:8081
 ```
 The web dependencies (`react-dom`, `react-native-web`, `@expo/metro-runtime`) and a web camera
 panel (`src/components/CameraView.web.tsx`) are wired up, so the whole HUD runs in Chromium —
-mock mode included. Verified on this machine: mock camera panel, live telemetry, temperature
-chart, speed slider, hold-to-drive (`dir=F` immediately then every 100 ms, `dir=S` on release),
-and both camera states (`playing` with a live MJPEG source, `error` + Retry when it is down).
+mock mode included. Verified on this machine: the default screen (menu button, link dot, slider,
+D-pad, no page scroll, both orientations), the drawer (slide, backdrop tap, stop-on-open), the
+settings form (invalid IPv4 rejected inline, valid one saved, mock switch taking the link red
+and locking the D-pad without a restart, reset to defaults), the floating camera (show/hide,
+corner resize with the 140 floor and the 50%/45% caps, size lock, persistence across reload), the
+obstacle edge glow (fades in below the threshold, `pointerEvents: none` so the pad still drives,
+lit with the drawer open), hold-to-drive (`dir=F` immediately then every 100 ms, `dir=S` on
+release), and both camera states (`playing` with a live MJPEG source, `error` + Retry when it is
+down).
 Browser caveat when talking to the **real** robot: browsers enforce CORS, so `GET /status`
 fails unless the firmware sends `Access-Control-Allow-Origin: *`; the `/move` request still
 reaches the device (only its response is unreadable). [INFERENCE — cannot be tested without
@@ -283,9 +315,11 @@ and a phone/emulator for real telemetry.
 laptop: `scrcpy` (Android, USB/Wi-Fi) or QuickTime "Movie Recording" (iPhone, Mac). Input is
 still on the laptop.
 
-**Configuring** is always editing `src/config.ts` (plus `src/robot/mock.ts` for failure
-injection) and restarting Metro with `-c`. If you want an in-app settings screen later, that is
-a new feature — nothing in the repo does it today.
+**Configuring.** Addresses, mock mode and the floating camera box are changed at runtime in the
+drawer's Settings section and persist across launches; `Reset to defaults` returns them to
+`src/config.ts`. Everything else (speeds, timings, wire-format names, camera-box clamps) is still
+editing `src/config.ts` (plus `src/robot/mock.ts` for failure injection) and restarting Metro
+with `-c`.
 
 ---
 
@@ -312,15 +346,16 @@ the ESP32 SoftAP default gateway address, so an AP-mode ESP32 firmware lands the
    curl "http://192.168.4.1/move?dir=S&speed=0"
    curl -v http://192.168.4.2:81/stream     # expect multipart/x-mixed-replace
    ```
-3. Edit `src/config.ts`: `USE_MOCK = false`; fix `ROBOT_IP`/`ROBOT_PORT` and
-   `CAMERA_IP`/`CAMERA_PORT` if firmware differs.
+3. In the app's drawer set `Mock mode` off, and fix `Robot IP` / `Camera IP` if the firmware
+   differs from the `192.168.4.x` defaults (or edit the defaults in `src/config.ts` for a fresh
+   install).
 4. If the firmware's JSON keys differ, change `STATUS_FIELDS` only
-   (e.g. `temperature: 'temperature'`).
-5. Restart with a cleared cache: `npx expo start -c`.
-6. Watch the header pill: `Syncing` → `Linked` green means `/status` is parsed and sane. The
-   pill prints the actual error string (`Network unreachable`, `No answer in 2s`, `HTTP 404`,
+   (e.g. `temperature: 'temperature'`) and restart with `npx expo start -c`.
+5. Watch the connection dot: `Syncing` (amber) → `Linked` (green) means `/status` is parsed and
+   sane, and the dot turns red after two failed polls. The last error string is shown in the
+   drawer's Telemetry panel (`Network unreachable`, `No answer in 2s`, `HTTP 404`,
    `Malformed JSON`, `Unexpected /status payload`) — that string is your debugging breadcrumb.
-7. Drive: the D-pad is locked until the link is green (`drive.enabled`).
+6. Drive: the D-pad is locked until the link is green (`drive.enabled`).
 
 ### Wiring notes
 
@@ -366,18 +401,19 @@ generation in async code.
 Related concepts also present, each with a concrete use:
 
 - **Discriminated-union result types instead of exceptions.** `StatusResult = {ok:true;status} |
-  {ok:false;error}` (`client.ts:14`). `getJson` catches everything — including `AbortError` from
+  {ok:false;error}` (`client.ts:16`). `getJson` catches everything — including `AbortError` from
   `AbortController` — and returns a reason, so a dead robot can never crash the UI.
-- **Self-scheduling loop instead of `setInterval`.** `useRobotStatus.ts:31,47` schedules the next
+- **Self-scheduling loop instead of `setInterval`.** `useRobotStatus.ts:37,53` schedules the next
   poll *after* the current one settles, so a hung robot cannot pile requests up; `cancelled`
-  flags the unmount.
+  flags the unmount. The effect is keyed on `useMock`/`robotIp`, so editing a setting restarts
+  the loop against the new destination.
 - **Refs to bridge React state and callbacks.** `useDrive` mirrors `speed`/`link`/`active` into
   refs so the event handlers and loops always read current values without re-creating callbacks
   (`speedRef.current = speed` on every render).
 - **Optimistic UI / safety stop as policy.** A stop is sent on release, on `AppState !== 'active'`,
-  on link `offline`, and on unmount — four independent paths, so no single missed event can leave
-  the car driving.
-- **Backpressure / in-flight dedupe.** `client.ts:63` keeps a module-level `inFlight` direction
+  on link `offline`, on unmount, and when the drawer opens — five independent paths, so no single
+  missed event can leave the car driving.
+- **Backpressure / in-flight dedupe.** `client.ts:72` keeps a module-level `inFlight` direction
   and skips re-sending the same direction while the previous request is still open. The release
   is bounded: the request is aborted after `MOVE_TIMEOUT_MS`, so a silent robot cannot pin the
   guard open and swallow later presses of that direction.
@@ -398,11 +434,14 @@ Factual notes from reading the source, worth knowing before the hardware arrives
 
 1. The camera on iOS may require tapping **Retry** (WKWebView + multipart MJPEG); Android is
    reliable. Telemetry and driving are unaffected.
-2. No runtime configuration UI, no persistence (speed resets to `DEFAULT_SPEED` on relaunch),
-   no navigation — the repo's `AGENTS.md` routing guidance refers to a multi-screen structure
-   this app does not have yet.
+2. No navigation — the repo's `AGENTS.md` routing guidance refers to a multi-screen structure
+   this app does not have yet. Everything else that was once listed here now exists: runtime
+   settings (drawer), persistence via AsyncStorage, and a floating camera. The one thing that
+   still does **not** persist is the slider position: speed resets to `DEFAULT_SPEED` on relaunch,
+   and the floating camera is off on every launch by design.
 3. Mock mode is the default (`USE_MOCK = true`); forgetting to flip it looks exactly like a
-   working robot, except the header shows the purple `MOCK` badge.
+   working robot, except every camera surface is labelled `mock` and the drawer's Settings
+   section shows `Mock mode` on. Flip it there — no restart, no config edit.
 4. `app.json` sets `userInterfaceStyle: "dark"`. A local `expo prebuild` / `expo run` warns
    *"Install expo-system-ui in your project to enable this feature"* — only native dev/release
    builds care (Expo Go and web ignore it, and the UI is dark anyway). Add it with

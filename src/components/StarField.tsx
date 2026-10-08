@@ -29,7 +29,7 @@ const STARS: { key: number; style: ViewStyle }[] = Array.from({ length: 120 }, (
       height: size,
       borderRadius: size,
       backgroundColor: tint,
-      opacity: 0.12 + next() * 0.55,
+      opacity: 0.06 + next() * 0.26,
     },
   };
 });
@@ -37,7 +37,7 @@ const STARS: { key: number; style: ViewStyle }[] = Array.from({ length: 120 }, (
 /** Ambient depth only: two off-screen nebulae and a field of fixed stars. */
 export const StarField = memo(function StarField() {
   return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.field]}>
       <View style={[styles.nebula, styles.nebulaCyan]} />
       <View style={[styles.nebula, styles.nebulaPurple]} />
       {STARS.map((star) => (
@@ -48,7 +48,9 @@ export const StarField = memo(function StarField() {
 });
 
 const styles = StyleSheet.create({
+  /** Clip the off-screen nebulae so the ambient layer can never add scroll. */
+  field: { overflow: 'hidden' },
   nebula: { position: 'absolute', width: 320, height: 320, borderRadius: 160 },
-  nebulaCyan: { top: -140, left: -120, backgroundColor: colors.cyan, opacity: 0.05 },
-  nebulaPurple: { bottom: -160, right: -130, backgroundColor: colors.purple, opacity: 0.06 },
+  nebulaCyan: { top: -140, left: -120, backgroundColor: colors.cyan, opacity: 0.03 },
+  nebulaPurple: { bottom: -160, right: -130, backgroundColor: colors.purple, opacity: 0.035 },
 });

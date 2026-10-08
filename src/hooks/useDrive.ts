@@ -10,6 +10,8 @@ export type Drive = {
   active: DriveDir | null;
   press: (dir: DriveDir) => void;
   release: () => void;
+  /** Cancel any held direction and send dir=S right away. */
+  stop: () => void;
   /** False while the telemetry link is known dead — the pad is locked out. */
   enabled: boolean;
 };
@@ -87,5 +89,5 @@ export function useDrive(speed: number, link: LinkState): Drive {
     [],
   );
 
-  return { active, press, release, enabled };
+  return { active, press, release, stop, enabled };
 }

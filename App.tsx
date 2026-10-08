@@ -1,24 +1,30 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CameraView } from './src/components/CameraView';
-import { ConnectionIndicator } from './src/components/ConnectionIndicator';
+import { Drawer } from './src/components/Drawer';
 import { DPad } from './src/components/DPad';
-import { LivePanel } from './src/components/LivePanel';
+import { EdgeGlow } from './src/components/EdgeGlow';
+import { FloatingCamera } from './src/components/FloatingCamera';
+import { HamburgerButton } from './src/components/HamburgerButton';
 import { SpeedSlider } from './src/components/SpeedSlider';
 import { StarField } from './src/components/StarField';
-import { TempChart } from './src/components/TempChart';
-import { WarningBanner } from './src/components/WarningBanner';
-import { DEFAULT_SPEED, OBSTACLE_WARNING_CM, USE_MOCK } from './src/config';
+import { StatusDot } from './src/components/StatusDot';
+import { DEFAULT_SPEED, OBSTACLE_WARNING_CM } from './src/config';
 import { useDrive } from './src/hooks/useDrive';
 import { useRobotStatus } from './src/hooks/useRobotStatus';
-import { colors, eyebrow, fonts, radius } from './src/theme';
+import { SettingsProvider } from './src/settings';
+import { colors, fonts } from './src/theme';
+
+/** Height of the top row (hamburger + status dot); safe-area padding is added on top. */
+const HEADER_HEIGHT = 48;
 
 export default function App() {
   return (
     <SafeAreaProvider>
-      <Cockpit />
+      <SettingsProvider>
+        <Cockpit />
+      </SettingsProvider>
     </SafeAreaProvider>
   );
 }
@@ -27,30 +33,31 @@ function Cockpit() {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [speed, setSpeed] = useState(DEFAULT_SPEED);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Off on every launch — deliberately not persisted.
+  const [cameraVisible, setCameraVisible] = useState(false);
 
-  const { link, status, history, lastError } = useRobotStatus();
+  const { link, status, history } = useRobotStatus();
   const drive = useDrive(speed, link);
+  const { stop } = drive;
+
+  // Opening the drawer is a safety stop, like releasing the pad or losing the link.
+  useEffect(() => {
+    if (menuOpen) stop();
+  }, [menuOpen, stop]);
+
+  const openMenu = useCallback(() => setMenuOpen(true), []);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
 
   const landscape = width > height;
-
-  const telemetry = (
-    <>
-      <LivePanel status={status} link={link} />
-      <TempChart values={history} />
-    </>
+  const headerHeight = insets.top + 8 + HEADER_HEIGHT;
+  const bodyWidth = width - insets.left - insets.right - 32;
+  const bodyHeight = height - headerHeight - insets.bottom - 12;
+  const padSide = Math.round(
+    landscape ? Math.min(bodyWidth * 0.5, bodyHeight) : Math.min(bodyWidth, bodyHeight * 0.55),
   );
-
-  const speedControl = <SpeedSlider value={speed} onChange={setSpeed} disabled={!drive.enabled} />;
 
   const near = status !== null && status.distance <= OBSTACLE_WARNING_CM;
-
-  const pad = (
-    <>
-      {near && status !== null ? <WarningBanner distance={status.distance} /> : null}
-      <DPad active={drive.active} enabled={drive.enabled} onPressIn={drive.press} onPressOut={drive.release} />
-      {drive.enabled ? null : <Text style={styles.lockout}>Drive locked · no telemetry link</Text>}
-    </>
-  );
 
   return (
     <View style={styles.root}>
@@ -62,56 +69,48 @@ function Cockpit() {
           { paddingTop: insets.top + 8, paddingLeft: insets.left + 16, paddingRight: insets.right + 16 },
         ]}
       >
-        <View>
-          <Text style={styles.brand}>TACOVER</Text>
-          <Text style={eyebrow}>Robot cockpit</Text>
+        <HamburgerButton onPress={openMenu} />
+        <StatusDot link={link} />
+      </View>
+
+      <View
+        style={[
+          styles.body,
+          landscape ? styles.bodyLandscape : styles.bodyPortrait,
+          { paddingBottom: insets.bottom + 12, paddingLeft: insets.left + 16, paddingRight: insets.right + 16 },
+        ]}
+      >
+        <View style={landscape ? styles.speedLandscape : styles.speedPortrait}>
+          <SpeedSlider value={speed} onChange={setSpeed} disabled={!drive.enabled} />
         </View>
-        <View style={styles.headerRight}>
-          {USE_MOCK ? <Text style={styles.mockBadge}>MOCK</Text> : null}
-          <ConnectionIndicator link={link} error={lastError} />
+
+        <View style={styles.padWrap}>
+          <View style={{ width: padSide }}>
+            <DPad
+              active={drive.active}
+              enabled={drive.enabled}
+              onPressIn={drive.press}
+              onPressOut={drive.release}
+            />
+            {drive.enabled ? null : <Text style={styles.lockout}>Drive locked · no telemetry link</Text>}
+          </View>
         </View>
       </View>
 
-      {landscape ? (
-        <View
-          style={[
-            styles.bodyRow,
-            { paddingBottom: insets.bottom + 12, paddingLeft: insets.left + 16, paddingRight: insets.right + 16 },
-          ]}
-        >
-          <View style={styles.colCamera}>
-            <CameraView style={styles.cameraFlex} />
-            {speedControl}
-          </View>
-          <ScrollView
-            style={styles.colGrow}
-            contentContainerStyle={styles.colContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {telemetry}
-          </ScrollView>
-          <ScrollView
-            style={styles.colCenter}
-            contentContainerStyle={styles.padContent}
-            showsVerticalScrollIndicator={false}
-          >
-            <View style={styles.padSquare}>{pad}</View>
-          </ScrollView>
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={[
-            styles.bodyColumn,
-            { paddingBottom: insets.bottom + 24, paddingLeft: insets.left + 16, paddingRight: insets.right + 16 },
-          ]}
-          showsVerticalScrollIndicator={false}
-        >
-          <CameraView style={styles.cameraPortrait} />
-          {telemetry}
-          {speedControl}
-          <View style={styles.padSquare}>{pad}</View>
-        </ScrollView>
-      )}
+      <FloatingCamera visible={cameraVisible} top={headerHeight + 4} right={insets.right + 12} />
+
+      <Drawer
+        open={menuOpen}
+        onClose={closeMenu}
+        cameraVisible={cameraVisible}
+        onCameraToggle={setCameraVisible}
+        status={status}
+        link={link}
+        history={history}
+      />
+
+      {/* Above everything, but never in front of a touch. */}
+      <EdgeGlow active={near} />
 
       <StatusBar style="light" />
     </View>
@@ -120,45 +119,13 @@ function Cockpit() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 10,
-  },
-  brand: {
-    fontFamily: fonts.sans,
-    fontSize: 22,
-    fontWeight: '800',
-    letterSpacing: 6,
-    color: colors.text,
-  },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  mockBadge: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    letterSpacing: 1.5,
-    color: colors.purple,
-    borderWidth: 1,
-    borderColor: colors.purple,
-    borderRadius: radius.sm,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-  },
-
-  bodyRow: { flex: 1, flexDirection: 'row', gap: 12 },
-  bodyColumn: { gap: 12, paddingTop: 4 },
-
-  colCamera: { flex: 1.25, gap: 12 },
-  colGrow: { flex: 1 },
-  colContent: { gap: 12 },
-  colCenter: { flex: 1 },
-  padContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
-
-  cameraFlex: { flex: 1 },
-  cameraPortrait: { height: 230 },
-  padSquare: { width: '100%', gap: 10 },
-
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  body: { flex: 1 },
+  bodyLandscape: { flexDirection: 'row', gap: 16 },
+  bodyPortrait: { flexDirection: 'column', gap: 12 },
+  speedLandscape: { flex: 1, maxWidth: 380, justifyContent: 'center' },
+  speedPortrait: { width: '100%' },
+  padWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   lockout: {
     fontFamily: fonts.mono,
     fontSize: 11,

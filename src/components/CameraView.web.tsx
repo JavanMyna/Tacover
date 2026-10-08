@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
-import { CAMERA_STREAM_URL, USE_MOCK } from '../config';
+import { CAMERA_STREAM_URL } from '../config';
+import { useSettings } from '../settings';
 import { colors, eyebrow, fonts, glow, radius } from '../theme';
 
 type StreamState = 'loading' | 'playing' | 'error';
@@ -24,31 +25,33 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
   const [state, setState] = useState<StreamState>('loading');
   const [attempt, setAttempt] = useState(0);
   const settled = useRef(false);
+  const { useMock, cameraIp } = useSettings();
+  const streamUrl = CAMERA_STREAM_URL(cameraIp);
 
   useEffect(() => {
     settled.current = false;
     setState('loading');
-    if (USE_MOCK) return;
+    if (useMock) return;
 
     const timer = setTimeout(() => {
       if (!settled.current) setState('error');
     }, FRAME_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [attempt]);
+  }, [attempt, useMock, cameraIp]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  const label = USE_MOCK ? 'mock' : state;
+  const label = useMock ? 'mock' : state;
 
   return (
     <View style={[styles.frame, style]}>
       <View style={styles.stage}>
-        {USE_MOCK ? (
-          <Placeholder title="Mock camera" detail={CAMERA_STREAM_URL} />
+        {useMock ? (
+          <Placeholder title="Mock camera" detail={streamUrl} />
         ) : (
           <img
-            key={attempt}
-            src={CAMERA_STREAM_URL}
+            key={`${cameraIp}-${attempt}`}
+            src={streamUrl}
             alt=""
             style={IMG_STYLE}
             onLoad={() => {
@@ -62,11 +65,11 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
           />
         )}
 
-        {!USE_MOCK && state !== 'playing' ? (
+        {!useMock && state !== 'playing' ? (
           <View style={styles.overlay}>
             <Placeholder
               title={state === 'error' ? 'Stream unavailable' : 'Connecting…'}
-              detail={CAMERA_STREAM_URL}
+              detail={streamUrl}
               onRetry={state === 'error' ? retry : undefined}
             />
           </View>
@@ -75,7 +78,7 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
 
       <View style={styles.caption}>
         <Text style={eyebrow}>Camera feed</Text>
-        <Text style={[eyebrow, state === 'error' && !USE_MOCK && { color: colors.danger }]}>{label}</Text>
+        <Text style={[eyebrow, state === 'error' && !useMock && { color: colors.danger }]}>{label}</Text>
       </View>
     </View>
   );
@@ -144,8 +147,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.cyan,
-    backgroundColor: 'rgba(69,224,255,0.10)',
+    backgroundColor: 'rgba(79,200,224,0.10)',
   },
-  retryPressed: { backgroundColor: 'rgba(69,224,255,0.24)' },
+  retryPressed: { backgroundColor: 'rgba(79,200,224,0.24)' },
   retryText: { fontFamily: fonts.mono, fontSize: 12, color: colors.cyan },
 });

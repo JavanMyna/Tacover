@@ -5,6 +5,7 @@ import {
   MOVE_TIMEOUT_MS,
   MOVE_URL,
   REPEAT_INTERVAL_MS,
+  ROBOT_IP,
   STATUS_TIMEOUT_MS,
   STATUS_URL,
   USE_MOCK,
@@ -13,6 +14,13 @@ import { mockDelay, mockMove, mockShouldFail, mockStatus } from './mock';
 import { MoveDir, parseStatus, RobotStatus } from './types';
 
 export type StatusResult = { ok: true; status: RobotStatus } | { ok: false; error: string };
+
+/**
+ * The board this client is currently pointed at. Seeded from the config
+ * defaults and replaced by the settings store whenever the user edits an
+ * address or flips mock mode — no restart, no reload.
+ */
+const config = { useMock: USE_MOCK, robotIp: ROBOT_IP };
 
 /**
  * GET returning parsed JSON, or a reason. Never throws and never rejects — a
@@ -43,13 +51,13 @@ async function getJson(url: string, timeoutMs: number): Promise<{ ok: true; body
 }
 
 export async function fetchStatus(): Promise<StatusResult> {
-  if (USE_MOCK) {
+  if (config.useMock) {
     await mockDelay();
     if (mockShouldFail()) return { ok: false, error: 'Mock link failure' };
     return { ok: true, status: mockStatus() };
   }
 
-  const res = await getJson(STATUS_URL, STATUS_TIMEOUT_MS);
+  const res = await getJson(STATUS_URL(config.robotIp), STATUS_TIMEOUT_MS);
   if (!res.ok) return res;
 
   const status = parseStatus(res.body);
@@ -73,7 +81,7 @@ let commandGeneration = 0;
 /** Fire one GET /move and update inFlight; never de-duplicates. */
 function dispatchMove(dir: MoveDir, speed: number): void {
   const clamped = Math.max(MIN_SPEED, Math.min(MAX_SPEED, Math.round(speed)));
-  const url = `${MOVE_URL}?${MOVE_PARAMS.direction}=${dir}&${MOVE_PARAMS.speed}=${clamped}`;
+  const url = `${MOVE_URL(config.robotIp)}?${MOVE_PARAMS.direction}=${dir}&${MOVE_PARAMS.speed}=${clamped}`;
 
   inFlight = dir;
   // Same AbortController pattern as getJson: a silent robot must not be able to
@@ -89,7 +97,7 @@ function dispatchMove(dir: MoveDir, speed: number): void {
 }
 
 export function sendMove(dir: MoveDir, speed: number): void {
-  if (USE_MOCK) {
+  if (config.useMock) {
     mockMove(dir, speed);
     return;
   }
@@ -106,7 +114,7 @@ export function sendMove(dir: MoveDir, speed: number): void {
  * the moment any newer move command is sent.
  */
 export function sendStop(speed: number): void {
-  if (USE_MOCK) {
+  if (config.useMock) {
     mockMove('S', speed);
     return;
   }
@@ -119,4 +127,16 @@ export function sendStop(speed: number): void {
       dispatchMove('S', speed);
     }, attempt * REPEAT_INTERVAL_MS);
   }
+}
+
+/**
+ * Re-point the client at another board / mock mode. Called by the settings
+ * store before the UI mounts and on every change. Any request already on the
+ * wire belonged to the old destination, so the de-duplication marker is
+ * dropped rather than carried over.
+ */
+export function configureRobot(next: { useMock: boolean; robotIp: string }): void {
+  config.useMock = next.useMock;
+  config.robotIp = next.robotIp;
+  inFlight = null;
 }

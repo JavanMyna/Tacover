@@ -15,14 +15,18 @@ export const CAMERA_PORT = 81;
 export const CAMERA_STREAM_PATH = '/stream';
 
 /** Port 80 is implied by the scheme, and that is the form the firmware documents. */
-const httpOrigin = (ip: string, port: number) => (port === 80 ? `http://${ip}` : `http://${ip}:${port}`);
+export const httpOrigin = (ip: string, port: number) => (port === 80 ? `http://${ip}` : `http://${ip}:${port}`);
 
-export const API_BASE = httpOrigin(ROBOT_IP, ROBOT_PORT);
-export const MOVE_URL = `${API_BASE}/move`;
-export const STATUS_URL = `${API_BASE}/status`;
-export const CAMERA_STREAM_URL = `${httpOrigin(CAMERA_IP, CAMERA_PORT)}${CAMERA_STREAM_PATH}`;
+/**
+ * URLs are derived from the *live* IP in the settings store, not from the
+ * defaults above, so editing an address takes effect without a restart.
+ */
+export const MOVE_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/move`;
+export const STATUS_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/status`;
+export const CAMERA_STREAM_URL = (ip: string = CAMERA_IP) =>
+  `${httpOrigin(ip, CAMERA_PORT)}${CAMERA_STREAM_PATH}`;
 /** Origin the stream document is served from, so its <img> is not cross-origin. */
-export const CAMERA_ORIGIN = `${httpOrigin(CAMERA_IP, CAMERA_PORT)}/`;
+export const CAMERA_ORIGIN = (ip: string = CAMERA_IP) => `${httpOrigin(ip, CAMERA_PORT)}/`;
 
 /* ──────────────────────────────── mock ──────────────────────────────── */
 
@@ -30,8 +34,8 @@ export const CAMERA_ORIGIN = `${httpOrigin(CAMERA_IP, CAMERA_PORT)}/`;
  * true  → no network at all; fake status/camera so the UI can be exercised.
  * false → talk to the real car at the addresses above.
  *
- * Ships as true so a first run works with no hardware; the header shows a MOCK
- * badge whenever it is on. Set to false to drive the real car.
+ * This is only the *default*: with a `true` value a first run works with no
+ * hardware, and the live value is whatever the settings drawer holds.
  */
 export const USE_MOCK = true;
 
@@ -73,3 +77,17 @@ export const STATUS_FIELDS = {
 
 /** Query-parameter names for GET /move?dir=..&speed=.. */
 export const MOVE_PARAMS = { direction: 'dir', speed: 'speed' } as const;
+
+/* ────────────────────────────── settings ────────────────────────────── */
+
+/** Single AsyncStorage key holding the whole persisted settings blob. */
+export const SETTINGS_STORAGE_KEY = 'tacover.settings.v1';
+
+/** Floating camera box, in logical pixels, and the clamps applied while resizing. */
+export const CAMERA_BOX_DEFAULT_WIDTH = 240;
+/** width / height. The MJPEG frames are 4:3, so the box keeps that ratio. */
+export const CAMERA_BOX_ASPECT = 4 / 3;
+export const CAMERA_BOX_MIN_WIDTH = 140;
+/** Caps so the box can never cover the D-pad or the speed slider. */
+export const CAMERA_BOX_MAX_WIDTH_RATIO = 0.5;
+export const CAMERA_BOX_MAX_HEIGHT_RATIO = 0.45;

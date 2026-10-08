@@ -106,7 +106,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnActive: { backgroundColor: 'rgba(69,224,255,0.16)', borderColor: colors.cyan },
+  btnActive: { backgroundColor: 'rgba(79,200,224,0.16)', borderColor: colors.cyan },
   btnDisabled: { opacity: 0.3 },
   hub: {
     flex: 1,
@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  hubActive: { borderColor: colors.purple, backgroundColor: 'rgba(165,107,255,0.12)' },
+  hubActive: { borderColor: colors.purple, backgroundColor: 'rgba(154,123,209,0.12)' },
   hubText: { fontFamily: fonts.mono, fontSize: 20, fontWeight: '700', color: colors.textFaint },
   hubTextActive: { color: colors.purple },
 });

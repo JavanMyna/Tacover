@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { FAILURES_BEFORE_OFFLINE, HISTORY_SIZE, STATUS_POLL_MS } from '../config';
 import { fetchStatus } from '../robot/client';
 import { RobotStatus } from '../robot/types';
+import { useSettings } from '../settings';
 
 /** connecting = nothing heard yet, online = last poll succeeded, offline = 2+ failures. */
 export type LinkState = 'connecting' | 'online' | 'offline';
@@ -23,10 +24,15 @@ export function useRobotStatus(): RobotLink {
   const [status, setStatus] = useState<RobotStatus | null>(null);
   const [history, setHistory] = useState<number[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
+  // The wire-affecting settings: editing either one restarts the loop below.
+  const { useMock, robotIp } = useSettings();
 
   useEffect(() => {
     let cancelled = false;
     let failures = 0;
+
+    // A new destination starts from an unknown link, not the old verdict.
+    setLink('connecting');
 
     const poll = async () => {
       const result = await fetchStatus();
@@ -51,7 +57,7 @@ export function useRobotStatus(): RobotLink {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [useMock, robotIp]);
 
   return { link, status, history, lastError };
 }

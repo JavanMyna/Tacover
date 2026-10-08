@@ -1,8 +1,9 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
-import { CAMERA_ORIGIN, CAMERA_STREAM_URL, USE_MOCK } from '../config';
+import { CAMERA_ORIGIN, CAMERA_STREAM_URL } from '../config';
 import { buildStreamHtml } from '../robot/camera';
+import { useSettings } from '../settings';
 import { colors, eyebrow, fonts, glow, radius } from '../theme';
 
 type StreamState = 'loading' | 'playing' | 'error';
@@ -11,9 +12,13 @@ type StreamState = 'loading' | 'playing' | 'error';
 export const CameraView = memo(function CameraView({ style }: { style?: StyleProp<ViewStyle> }) {
   const [state, setState] = useState<StreamState>('loading');
   const [attempt, setAttempt] = useState(0);
+  const { useMock, cameraIp } = useSettings();
 
   // Stable identity — a fresh source object would reload the WebView every render.
-  const source = useMemo(() => ({ html: buildStreamHtml(CAMERA_STREAM_URL), baseUrl: CAMERA_ORIGIN }), []);
+  const source = useMemo(
+    () => ({ html: buildStreamHtml(CAMERA_STREAM_URL(cameraIp)), baseUrl: CAMERA_ORIGIN(cameraIp) }),
+    [cameraIp],
+  );
 
   const onMessage = useCallback((event: WebViewMessageEvent) => {
     try {
@@ -30,16 +35,16 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
     setAttempt((n) => n + 1);
   }, []);
 
-  const label = USE_MOCK ? 'mock' : state;
+  const label = useMock ? 'mock' : state;
 
   return (
     <View style={[styles.frame, style]}>
       <View style={styles.stage}>
-        {USE_MOCK ? (
-          <Placeholder title="Mock camera" detail={CAMERA_STREAM_URL} />
+        {useMock ? (
+          <Placeholder title="Mock camera" detail={CAMERA_STREAM_URL(cameraIp)} />
         ) : (
           <WebView
-            key={attempt}
+            key={`${cameraIp}-${attempt}`}
             source={source}
             originWhitelist={['*']}
             mixedContentMode="always"
@@ -55,11 +60,11 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
           />
         )}
 
-        {!USE_MOCK && state !== 'playing' ? (
+        {!useMock && state !== 'playing' ? (
           <View style={styles.overlay}>
             <Placeholder
               title={state === 'error' ? 'Stream unavailable' : 'Connecting…'}
-              detail={CAMERA_STREAM_URL}
+              detail={CAMERA_STREAM_URL(cameraIp)}
               onRetry={state === 'error' ? retry : undefined}
             />
           </View>
@@ -68,7 +73,7 @@ export const CameraView = memo(function CameraView({ style }: { style?: StylePro
 
       <View style={styles.caption}>
         <Text style={eyebrow}>Camera feed</Text>
-        <Text style={[eyebrow, state === 'error' && !USE_MOCK && { color: colors.danger }]}>{label}</Text>
+        <Text style={[eyebrow, state === 'error' && !useMock && { color: colors.danger }]}>{label}</Text>
       </View>
     </View>
   );
@@ -138,8 +143,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.cyan,
-    backgroundColor: 'rgba(69,224,255,0.10)',
+    backgroundColor: 'rgba(79,200,224,0.10)',
   },
-  retryPressed: { backgroundColor: 'rgba(69,224,255,0.24)' },
+  retryPressed: { backgroundColor: 'rgba(79,200,224,0.24)' },
   retryText: { fontFamily: fonts.mono, fontSize: 12, color: colors.cyan },
 });
