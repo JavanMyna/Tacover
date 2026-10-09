@@ -5,11 +5,18 @@
 
 /* ─────────────────────────────── devices ─────────────────────────────── */
 
-/** Robot control board (drive + telemetry). */
+/**
+ * Robot control board (drive + telemetry). The ESP32 is its own Wi-Fi access
+ * point, so the base address is the AP's address: http://192.168.4.1. Only the
+ * host part is editable (settings drawer); the port and scheme are fixed.
+ */
 export const ROBOT_IP = '192.168.4.1';
 export const ROBOT_PORT = 80;
 
-/** Camera module serving the MJPEG stream. */
+/**
+ * Camera module serving the MJPEG stream. Mock mode only: the rover has no
+ * camera yet, so nothing requests this address while USE_MOCK is off.
+ */
 export const CAMERA_IP = '192.168.4.2';
 export const CAMERA_PORT = 81;
 export const CAMERA_STREAM_PATH = '/stream';
@@ -21,7 +28,8 @@ export const httpOrigin = (ip: string, port: number) => (port === 80 ? `http://$
  * URLs are derived from the *live* IP in the settings store, not from the
  * defaults above, so editing an address takes effect without a restart.
  */
-export const MOVE_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/move`;
+export const DRIVE_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/drive`;
+export const STOP_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/stop`;
 export const STATUS_URL = (ip: string = ROBOT_IP) => `${httpOrigin(ip, ROBOT_PORT)}/status`;
 export const CAMERA_STREAM_URL = (ip: string = CAMERA_IP) =>
   `${httpOrigin(ip, CAMERA_PORT)}${CAMERA_STREAM_PATH}`;
@@ -31,8 +39,8 @@ export const CAMERA_ORIGIN = (ip: string = CAMERA_IP) => `${httpOrigin(ip, CAMER
 /* ──────────────────────────────── mock ──────────────────────────────── */
 
 /**
- * true  → no network at all; fake status/camera so the UI can be exercised.
- * false → talk to the real car at the addresses above.
+ * true  → no network at all; fake telemetry/camera so the UI can be exercised.
+ * false → talk to the real rover at the address above.
  *
  * This is only the *default*: with a `true` value a first run works with no
  * hardware, and the live value is whatever the settings drawer holds.
@@ -41,42 +49,54 @@ export const USE_MOCK = true;
 
 /* ─────────────────────────────── driving ─────────────────────────────── */
 
+/**
+ * The slider's own units are the wire units: every /drive command sends one
+ * axis of -MAX_SPEED..MAX_SPEED, so no conversion happens on the way out.
+ */
 export const MIN_SPEED = 0;
-export const MAX_SPEED = 255;
-export const DEFAULT_SPEED = 150;
+export const MAX_SPEED = 100;
+export const DEFAULT_SPEED = 60;
 
 /** While a direction button is held, the command is resent on this cadence. */
 export const REPEAT_INTERVAL_MS = 100;
+/** Bounds an in-flight command, so the de-duplication guard cannot stick to it. */
+export const DRIVE_TIMEOUT_MS = 300;
 
 /* ─────────────────────────────── telemetry ───────────────────────────── */
 
-export const STATUS_POLL_MS = 1000;
+export const STATUS_POLL_MS = 500;
 /** A request that has not answered within this window counts as a failure. */
-export const STATUS_TIMEOUT_MS = 2000;
-/** A drive command is not worth waiting 2s for — drop it and let the next tick stand. */
-export const MOVE_TIMEOUT_MS = 800;
+export const STATUS_TIMEOUT_MS = 1500;
 /** Consecutive failed /status calls that flip the link to "offline". */
 export const FAILURES_BEFORE_OFFLINE = 2;
 
-/** Distance (cm) at or below which the obstacle banner appears. */
+/** Distance (cm) at or below which the obstacle warning appears, even if /status has not set blocked. */
 export const OBSTACLE_WARNING_CM = 15;
-/** Temperature readings kept for the chart. */
+/** Temperature readings kept for the chart (mock mode only — the rover has no probe yet). */
 export const HISTORY_SIZE = 60;
 
 /* ──────────────────────────── wire format ───────────────────────────── */
 
 /**
- * The only place status field names appear. If the firmware renames a field,
- * change it here — parsing, mocking and the UI all read this map.
+ * The rover's HTTP API — the only place its paths, query-parameter names and
+ * status field names appear; the client, the parser and the mock all read it.
+ *
+ *   GET /drive?x=<-100..100>&y=<-100..100>    held on a 100 ms cadence
+ *                                             x = turn (right positive)
+ *                                             y = forward (up positive)
+ *   GET /stop                                 on release, and after every safety event
+ *   GET /status  -> {"distance":<cm|-1>,"blocked":<bool>,"left":<n>,"right":<n>}
+ *                                             distance -1 = nothing detected
  */
 export const STATUS_FIELDS = {
-  temperature: 'temp',
-  humidity: 'humidity',
   distance: 'distance',
+  blocked: 'blocked',
+  left: 'left',
+  right: 'right',
 } as const;
 
-/** Query-parameter names for GET /move?dir=..&speed=.. */
-export const MOVE_PARAMS = { direction: 'dir', speed: 'speed' } as const;
+/** Query-parameter names for GET /drive?x=..&y=.. */
+export const DRIVE_PARAMS = { turn: 'x', forward: 'y' } as const;
 
 /* ────────────────────────────── settings ────────────────────────────── */
 

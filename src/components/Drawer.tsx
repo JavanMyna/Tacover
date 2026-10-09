@@ -28,6 +28,8 @@ type Props = {
   status: RobotStatus | null;
   link: LinkState;
   history: number[];
+  /** False → the rover has no camera and no temperature/humidity, so those panels are hidden. */
+  mock: boolean;
 };
 
 /**
@@ -36,7 +38,7 @@ type Props = {
  * Slides with a transform (GPU) rather than a layout animation; the backdrop
  * and the Android back button both close it.
  */
-export const Drawer = ({ open, onClose, cameraVisible, onCameraToggle, status, link, history }: Props) => {
+export const Drawer = ({ open, onClose, cameraVisible, onCameraToggle, status, link, history, mock }: Props) => {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const drawerWidth = Math.min(width * 0.8, 360);
@@ -91,24 +93,26 @@ export const Drawer = ({ open, onClose, cameraVisible, onCameraToggle, status, l
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
         >
-          <Panel title="Camera" accent="purple">
-            <View style={styles.switchRow}>
-              <View style={styles.switchCopy}>
-                <Text style={eyebrow}>Show camera</Text>
-                <Text style={styles.hint}>Floating feed over the controls</Text>
+          {mock ? (
+            <Panel title="Camera" accent="purple">
+              <View style={styles.switchRow}>
+                <View style={styles.switchCopy}>
+                  <Text style={eyebrow}>Show camera</Text>
+                  <Text style={styles.hint}>Floating feed over the controls</Text>
+                </View>
+                <Switch
+                  accessibilityLabel="Show camera"
+                  value={cameraVisible}
+                  onValueChange={onCameraToggle}
+                  trackColor={{ false: colors.edge, true: colors.purpleSoft }}
+                  thumbColor={cameraVisible ? colors.purple : colors.textDim}
+                />
               </View>
-              <Switch
-                accessibilityLabel="Show camera"
-                value={cameraVisible}
-                onValueChange={onCameraToggle}
-                trackColor={{ false: colors.edge, true: colors.purpleSoft }}
-                thumbColor={cameraVisible ? colors.purple : colors.textDim}
-              />
-            </View>
-          </Panel>
+            </Panel>
+          ) : null}
 
-          <LivePanel status={status} link={link} />
-          <TempChart values={history} />
+          <LivePanel status={status} link={link} mock={mock} />
+          {mock ? <TempChart values={history} /> : null}
           <SettingsPanel />
         </ScrollView>
       </Animated.View>

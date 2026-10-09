@@ -16,14 +16,14 @@ One screen, two layouts:
 | Panel | What it does |
 | --- | --- |
 | Header row | menu button (opens the drawer) + connection dot (`useRobotStatus` link state) |
-| Speed | 0–255 slider, `PanResponder` based, no dependency |
+| Speed | 0–100 slider, `PanResponder` based, no dependency |
 | D-pad | hold-to-drive; release / background / link loss / drawer open all stop the car |
-| Camera (drawer) | `Show camera` switch for the floating feed — off on every launch |
-| Telemetry (drawer) | temperature / humidity / obstacle distance |
-| Temperature trend (drawer) | hand-drawn SVG line chart of the last 60 readings |
-| Settings (drawer) | robot IP, camera IP, mock switch, reset to defaults — persisted |
-| Floating camera | MJPEG feed over the controls (Android reliably, iOS hit-or-miss) |
-| Edge glow | soft red band around the screen edges at ≤ 15 cm |
+| Camera (drawer) | `Show camera` switch for the floating feed — mock mode only, off on every launch |
+| Telemetry (drawer) | distance / blocked / left / right, plus temperature + humidity in mock mode |
+| Temperature trend (drawer) | hand-drawn SVG line chart of the last 60 readings — mock mode only |
+| Settings (drawer) | robot IP, mock switch, reset to defaults — plus camera IP in mock mode |
+| Floating camera | MJPEG feed over the controls (Android reliably, iOS hit-or-miss) — mock mode only |
+| Edge glow | soft red band around the screen edges when the rover reports `blocked` (or ≤ 15 cm) |
 
 The default screen shows only the slider, the D-pad, the menu button and the dot, and never
 scrolls. Landscape puts the slider on the left and the D-pad on the right; portrait stacks the
@@ -80,13 +80,13 @@ src/settings.tsx             live settings context: AsyncStorage load/save, IPv4
 src/theme.ts                 palette, mono/sans fonts, glow() helper, eyebrow style
 
 src/robot/
-  types.ts                   MoveDir ('F'|'B'|'L'|'R'|'S'), RobotStatus, parseStatus()
-  client.ts                  fetchStatus() / sendMove() / sendStop(); configureRobot()
+  types.ts                   DriveDir ('F'|'B'|'L'|'R'), RobotStatus, driveVector(), parseStatus()
+  client.ts                  fetchStatus() / sendDrive() / sendStop(); configureRobot()
   mock.ts                    random-walk fake telemetry, MOCK_FAILURE_RATE, latency
   camera.ts                  buildStreamHtml() — the page loaded into the WebView
 
 src/hooks/
-  useRobotStatus.ts          1 s /status poll, link state, 60-sample temp history
+  useRobotStatus.ts          500 ms /status poll, link state, 60-sample temp history
   useDrive.ts                hold-to-repeat driving + every safety stop
 
 src/components/
@@ -102,12 +102,12 @@ Data flow:
 graph LR
   S[settings.tsx: AsyncStorage] -->|configureRobot useMock/IP| F
   S -->|useMock, robotIp| A
-  A[useRobotStatus: 1s poll] -->|link, status, history| B[StatusDot / Drawer: LivePanel, TempChart]
+  A[useRobotStatus: 500 ms poll] -->|link, status, history| B[StatusDot / Drawer: LivePanel, TempChart]
   A -->|link| C[useDrive]
   D[DPad press/release] --> C
   E[SpeedSlider] --> C
   M[Drawer opens] -->|stop| C
-  C -->|sendMove F/B/L/R/S| F[client.ts fetch]
+  C -->|sendDrive x/y| F[client.ts fetch]
   A -->|fetchStatus| F
   F -->|useMock| G[mock.ts]
   F -->|useMock=false, live robotIp| H[ESP32]
@@ -122,25 +122,33 @@ graph LR
 All of this is defined in `src/config.ts` and nowhere else.
 
 ```
-GET http://192.168.4.1/move?dir=F|B|L|R|S&speed=0-255     # port 80 implied
+GET http://192.168.4.1/drive?x=<-100..100>&y=<-100..100>   # port 80 implied
+GET http://192.168.4.1/stop
 GET http://192.168.4.1/status
-      -> {"temp":<number>,"humidity":<number>,"distance":<number>}   # °C, %, cm
-GET http://192.168.4.2:81/stream                           # multipart/x-mixed-replace MJPEG
+      -> {"distance":<cm|-1>,"blocked":<bool>,"left":<n>,"right":<n>}
+GET http://192.168.4.2:81/stream                           # mock camera only
 ```
 
-- `dir=F` forward, `B` back, `L` left, `R` right, `S` stop.
-- While a button is held the command is **resent every 100 ms** (`REPEAT_INTERVAL_MS`);
-  the firmware therefore only needs to latch the last command — it does not need a
-  watchdog, though a dead-man timeout on the firmware side is still good practice.
-- `/status` is polled every 1000 ms with a 2000 ms timeout; 2 consecutive failures flip the
-  link to `offline` (`FAILURES_BEFORE_OFFLINE`), which locks out the D-pad and force-sends `S`.
+- `x` is turn (right positive), `y` is forward (up positive). The pad's four directions become
+  axis pairs — `F` `{x:0,y:+s}`, `B` `{x:0,y:-s}`, `L` `{x:-s,y:0}`, `R` `{x:+s,y:0}` — where `s`
+  is the slider value (`driveVector()`, `src/robot/types.ts:21`).
+- While a button is held `/drive` is **resent every 100 ms** (`REPEAT_INTERVAL_MS`) and `/stop`
+  goes out on release (three times, 100 ms apart). The firmware therefore only needs to latch
+  the last command — it does not need a watchdog, though a dead-man timeout on the firmware side
+  is still good practice.
+- `/status` is polled every 500 ms with a 1500 ms timeout; 2 consecutive failures flip the link
+  to `offline` (`FAILURES_BEFORE_OFFLINE`), which locks out the D-pad and force-sends `/stop`.
+- The rover has no camera, temperature or humidity: those three surfaces render in mock mode
+  only, `/status` never carries them, and nothing ever requests the stream host.
 - Field/param **names** are remappable without touching any other file: `STATUS_FIELDS` and
-  `MOVE_PARAMS` in `src/config.ts`. Endpoint *paths* are built in the same file, as functions of
-  the live IP (`MOVE_URL(ip)`, `STATUS_URL(ip)`, `CAMERA_STREAM_URL(ip)`, `CAMERA_STREAM_PATH`),
-  so an address edited in the drawer takes effect on the next request.
-- `parseStatus()` (`src/robot/types.ts:20-45`) accepts numbers **or numeric strings**, and
-  returns `null` for a malformed payload so a firmware change shows as "Unexpected /status
-  payload" instead of `NaN` on screen.
+  `DRIVE_PARAMS` in `src/config.ts`. Endpoint *paths* are built in the same file, as functions of
+  the live IP (`DRIVE_URL(ip)`, `STOP_URL(ip)`, `STATUS_URL(ip)`, `CAMERA_STREAM_URL(ip)`,
+  `CAMERA_STREAM_PATH`), so an address edited in the drawer takes effect on the next request.
+- `parseStatus()` (`src/robot/types.ts:55-68`) accepts numbers **or numeric strings** for
+  `distance`/`left`/`right` and requires a real boolean for `blocked`; anything else returns
+  `null`, so a firmware change shows as "Unexpected /status payload" instead of `NaN` on screen.
+  `isObstacleNear()` (`src/robot/types.ts:76`) is the one obstacle-warning rule the HUD and the
+  mock share: `blocked`, or a real range at or below `OBSTACLE_WARNING_CM`.
 
 ---
 
@@ -152,25 +160,26 @@ GET http://192.168.4.2:81/stream                           # multipart/x-mixed-r
 | --- | --- | --- |
 | `USE_MOCK` | `true` | fake all robot I/O, no network (seed for the drawer switch) |
 | `ROBOT_IP` / `ROBOT_PORT` | `192.168.4.1` / `80` | drive + telemetry board (seed for Settings) |
-| `CAMERA_IP` / `CAMERA_PORT` | `192.168.4.2` / `81` | MJPEG host (seed for Settings) |
+| `CAMERA_IP` / `CAMERA_PORT` | `192.168.4.2` / `81` | MJPEG host — mock mode only (seed for Settings) |
 | `CAMERA_STREAM_PATH` | `/stream` | MJPEG path |
-| `MIN_SPEED` / `MAX_SPEED` / `DEFAULT_SPEED` | 0 / 255 / 150 | slider range |
-| `REPEAT_INTERVAL_MS` | `100` | resend cadence while held |
-| `STATUS_POLL_MS` | `1000` | `/status` cadence |
-| `STATUS_TIMEOUT_MS` | `2000` | slow answer = failure |
-| `MOVE_TIMEOUT_MS` | `800` | bounds an in-flight `/move`, so the dedupe guard cannot stick |
+| `MIN_SPEED` / `MAX_SPEED` / `DEFAULT_SPEED` | 0 / 100 / 60 | slider range — the wire's own units |
+| `REPEAT_INTERVAL_MS` | `100` | `/drive` resend cadence while held |
+| `DRIVE_TIMEOUT_MS` | `300` | bounds an in-flight command, so the dedupe guard cannot stick |
+| `STATUS_POLL_MS` | `500` | `/status` cadence |
+| `STATUS_TIMEOUT_MS` | `1500` | slow answer = failure |
 | `FAILURES_BEFORE_OFFLINE` | `2` | failed polls before red link |
 | `OBSTACLE_WARNING_CM` | `15` | edge-glow threshold |
-| `HISTORY_SIZE` | `60` | chart samples |
+| `HISTORY_SIZE` | `60` | chart samples (mock mode only) |
 | `CAMERA_BOX_DEFAULT_WIDTH` | `240` | floating camera width (4:3 aspect preserved) |
 | `CAMERA_BOX_MIN_WIDTH` | `140` | smallest floating camera |
 | `CAMERA_BOX_MAX_WIDTH_RATIO` / `..._HEIGHT_RATIO` | `0.5` / `0.45` | resize caps, as a share of the screen |
 | `SETTINGS_STORAGE_KEY` | `tacover.settings.v1` | AsyncStorage key for the settings blob |
-| `STATUS_FIELDS` | `temp` / `humidity` / `distance` | JSON key mapping |
-| `MOVE_PARAMS` | `dir` / `speed` | query-param mapping |
+| `STATUS_FIELDS` | `distance` / `blocked` / `left` / `right` | JSON key mapping |
+| `DRIVE_PARAMS` | `x` / `y` | query-param mapping |
 
-**Runtime settings live in the drawer** (`src/settings.tsx`): robot IP, camera IP, mock mode,
-plus the floating camera's size and size-lock. They are written to AsyncStorage on every change
+**Runtime settings live in the drawer** (`src/settings.tsx`): robot IP, mock mode and — in mock
+mode — the camera IP, plus the floating camera's size and size-lock. They are written to
+AsyncStorage on every change
 and read back *before the first `/status` poll*, so a changed address or the mock switch applies
 immediately without a restart; `Reset to defaults` restores everything above. `src/config.ts`
 stays the single source of **default** values — changing a default there only affects a fresh
@@ -305,8 +314,20 @@ obstacle edge glow (fades in below the threshold, `pointerEvents: none` so the p
 lit with the drawer open), hold-to-drive (`dir=F` immediately then every 100 ms, `dir=S` on
 release), and both camera states (`playing` with a live MJPEG source, `error` + Retry when it is
 down).
+
+Re-verified against a local fake of the new rover API (a throwaway Node server on
+`127.0.0.1:80` answering `/drive`, `/stop` and the new `/status`), with `Mock mode` off and
+`Robot IP` = `127.0.0.1` typed into the drawer: telemetry showed the wire's
+`distance`/`blocked`/`left`/`right`; holding **Forward** sent `GET /drive?x=0&y=60` every ~100 ms
+and releasing sent `GET /stop` three times (immediately, +100 ms, +200 ms); **Right** sent
+`x=60`, **Left** `x=-60`, and with the slider at 20 **Reverse** sent `y=-20`; `/status` arrived
+every ~500 ms; the camera switch, camera address, temperature, humidity and the trend chart all
+disappeared in real mode; and the edge glow tracked the rule below — `blocked=1/distance=8` lit
+it, `distance=-1` showed `--` with no glow, and `blocked=0/distance=5` lit it on distance alone.
+Flipping mock back on restored every hidden surface, logged `[mock] /drive?x=0&y=20` +
+`[mock] /stop`, and made no network calls at all.
 Browser caveat when talking to the **real** robot: browsers enforce CORS, so `GET /status`
-fails unless the firmware sends `Access-Control-Allow-Origin: *`; the `/move` request still
+fails unless the firmware sends `Access-Control-Allow-Origin: *`; the `/drive` request still
 reaches the device (only its response is unreadable). [INFERENCE — cannot be tested without
 hardware; mock mode has no network at all.] So use the browser for UI work and mock driving,
 and a phone/emulator for real telemetry.
@@ -331,8 +352,10 @@ the ESP32 SoftAP default gateway address, so an AP-mode ESP32 firmware lands the
 
 ### Firmware must expose
 
-1. HTTP server on port 80, endpoints `/move` and `/status` exactly as in §4, JSON body only.
-2. MJPEG server on port 81 at `/stream` (a separate ESP32-CAM board, or another interface).
+1. HTTP server on port 80, endpoints `/drive`, `/stop` and `/status` exactly as in §4, JSON
+   body on `/status` only.
+2. An MJPEG server on port 81 at `/stream` — **the rover has none yet**; that is the mock
+   camera's contract, kept for the day a camera board is added.
 3. `Content-Type: multipart/x-mixed-replace; boundary=...` on the stream, and the usual
    `Content-Type: image/jpeg` parts.
 
@@ -342,28 +365,31 @@ the ESP32 SoftAP default gateway address, so an AP-mode ESP32 firmware lands the
 2. From a laptop **on that AP**, verify before touching the app:
    ```bash
    curl http://192.168.4.1/status
-   curl "http://192.168.4.1/move?dir=F&speed=150"
-   curl "http://192.168.4.1/move?dir=S&speed=0"
-   curl -v http://192.168.4.2:81/stream     # expect multipart/x-mixed-replace
+   curl "http://192.168.4.1/drive?x=0&y=60"
+   curl http://192.168.4.1/stop
+   curl -v http://192.168.4.2:81/stream     # mock camera only
    ```
-3. In the app's drawer set `Mock mode` off, and fix `Robot IP` / `Camera IP` if the firmware
-   differs from the `192.168.4.x` defaults (or edit the defaults in `src/config.ts` for a fresh
-   install).
-4. If the firmware's JSON keys differ, change `STATUS_FIELDS` only
-   (e.g. `temperature: 'temperature'`) and restart with `npx expo start -c`.
+3. In the app's drawer set `Mock mode` off and fix `Robot IP` if the firmware differs from the
+   `192.168.4.1` default (or edit it in `src/config.ts` for a fresh install). The `Camera IP`
+   field disappears in real mode — the rover has no camera.
+4. If the firmware's JSON keys differ, change `STATUS_FIELDS` only (e.g. `distance: 'cm'`) and
+   restart with `npx expo start -c`.
 5. Watch the connection dot: `Syncing` (amber) → `Linked` (green) means `/status` is parsed and
    sane, and the dot turns red after two failed polls. The last error string is shown in the
-   drawer's Telemetry panel (`Network unreachable`, `No answer in 2s`, `HTTP 404`,
+   drawer's Telemetry panel (`Network unreachable`, `No answer in 1.5s`, `HTTP 404`,
    `Malformed JSON`, `Unexpected /status payload`) — that string is your debugging breadcrumb.
 6. Drive: the D-pad is locked until the link is green (`drive.enabled`).
 
 ### Wiring notes
 
-- Two IPs are assumed. A single board serving both control and camera still works: point both
-  `ROBOT_IP` and `CAMERA_IP` at the same host and adjust ports/paths.
-- `speed` is 0–255 and is clamped in `client.ts` before it hits the wire.
-- Keep the firmware tolerant of a *stream* of identical `dir` values — that is what hold-to-drive
-  produces (10 requests/second while held).
+- The real setup needs one host: the rover. (The mock camera is the second IP; a board serving
+  both control and camera would work the same way — point `ROBOT_IP` and `CAMERA_IP` at the same
+  host and adjust ports/paths.)
+- `x` and `y` are each 0–100 in magnitude — the slider's own units — and `client.ts` clamps and
+  rounds them before they hit the wire.
+- Keep the firmware tolerant of a *stream* of identical `x`/`y` pairs — that is what hold-to-drive
+  produces (10 requests/second while held) — and of a `/stop` burst: a release sends up to three,
+  the second and third 100 ms apart. Make `/stop` idempotent.
 - Android release builds would block cleartext HTTP without the `expo-build-properties` plugin
   in `app.json`; it is already configured, so nothing to add.
 
@@ -385,7 +411,7 @@ const press = (dir) => {
   const generation = loopRef.current;
   const repeat = () => {
     if (loopRef.current !== generation) return;             // stale → die silently
-    if (activeRef.current !== null) sendMove(activeRef.current, speedRef.current);
+    if (activeRef.current !== null) sendDrive(activeRef.current, speedRef.current);
     setTimeout(repeat, REPEAT_INTERVAL_MS);
   };
   setTimeout(repeat, REPEAT_INTERVAL_MS);
@@ -403,7 +429,7 @@ Related concepts also present, each with a concrete use:
 - **Discriminated-union result types instead of exceptions.** `StatusResult = {ok:true;status} |
   {ok:false;error}` (`client.ts:16`). `getJson` catches everything — including `AbortError` from
   `AbortController` — and returns a reason, so a dead robot can never crash the UI.
-- **Self-scheduling loop instead of `setInterval`.** `useRobotStatus.ts:37,53` schedules the next
+- **Self-scheduling loop instead of `setInterval`.** `useRobotStatus.ts:37,57` schedules the next
   poll *after* the current one settles, so a hung robot cannot pile requests up; `cancelled`
   flags the unmount. The effect is keyed on `useMock`/`robotIp`, so editing a setting restarts
   the loop against the new destination.
@@ -413,9 +439,10 @@ Related concepts also present, each with a concrete use:
 - **Optimistic UI / safety stop as policy.** A stop is sent on release, on `AppState !== 'active'`,
   on link `offline`, on unmount, and when the drawer opens — five independent paths, so no single
   missed event can leave the car driving.
-- **Backpressure / in-flight dedupe.** `client.ts:72` keeps a module-level `inFlight` direction
-  and skips re-sending the same direction while the previous request is still open. The release
-  is bounded: the request is aborted after `MOVE_TIMEOUT_MS`, so a silent robot cannot pin the
+- **Backpressure / in-flight dedupe.** `client.ts:72` keeps a module-level `inFlight` key
+  (`"x,y"`, or `"stop"`) and skips re-sending a command whose key is already on the wire, so a
+  slow board gets at most one in-flight `/drive` instead of a 10-per-second pile-up. The release
+  is bounded: the request is aborted after `DRIVE_TIMEOUT_MS`, so a silent robot cannot pin the
   guard open and swallow later presses of that direction.
 - **WebView ↔ native `postMessage` bridge.** `src/robot/camera.ts` injects a page whose `<script>`
   polls `img.naturalWidth` and posts `{type:'playing'|'error'}` back to RN; also an 8-second
@@ -446,11 +473,15 @@ Factual notes from reading the source, worth knowing before the hardware arrives
    *"Install expo-system-ui in your project to enable this feature"* — only native dev/release
    builds care (Expo Go and web ignore it, and the UI is dark anyway). Add it with
    `npx expo install expo-system-ui` if you ever build a dev client.
+5. The rover has no camera, temperature or humidity yet. With mock mode off the drawer drops the
+   **Show camera** switch, the floating feed, those two readouts, the trend chart and the
+   **Camera IP** field, and the app never touches port 81; only `distance`, `blocked`, `left` and
+   `right` remain. The mock still supplies all of the hidden ones, so that UI stays exercisable.
 
-Previously item 1 in this list was a real bug: `MOVE_TIMEOUT_MS` was declared and imported but
-never used, so `sendMove`'s `inFlight` guard could be pinned open forever by a `/move` request
-that never answered — repeats of that one direction were then silently dropped while other
-directions still worked. Fixed in `src/robot/client.ts` (AbortController bounded by
-`MOVE_TIMEOUT_MS`, released in `finally`). Measured, against a local server: a silent robot gave
+Previously item 1 in this list was a real bug: `DRIVE_TIMEOUT_MS` was declared and imported but
+never used, so `sendDrive`'s `inFlight` guard could be pinned open forever by a `/drive` request
+that never answered — repeats of that one command were then silently dropped while other
+commands still worked. Fixed in `src/robot/client.ts` (AbortController bounded by
+`DRIVE_TIMEOUT_MS`, released in `finally`). Measured, against a local server: a silent robot gave
 1 request per 2 s hold before and 3 after; a slow-but-answering robot gives 4, i.e. the
 skip-while-in-flight behaviour is still intact.

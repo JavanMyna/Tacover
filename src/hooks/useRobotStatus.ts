@@ -15,7 +15,7 @@ export type RobotLink = {
 };
 
 /**
- * Polls GET /status on a 1s cadence. The next tick is scheduled after the
+ * Polls GET /status on a 500 ms cadence. The next tick is scheduled after the
  * current one settles, so a hung robot can never pile requests up; a request
  * that exceeds STATUS_TIMEOUT_MS is aborted and counted as a failure.
  */
@@ -43,7 +43,11 @@ export function useRobotStatus(): RobotLink {
         setStatus(result.status);
         setLastError(null);
         setLink('online');
-        setHistory((prev) => [...prev, result.status.temperature].slice(-HISTORY_SIZE));
+        // The chart is mock-only; the rover reports no temperature at all.
+        const { temperature } = result.status;
+        if (temperature !== null) {
+          setHistory((prev) => [...prev, temperature].slice(-HISTORY_SIZE));
+        }
       } else {
         failures += 1;
         setLastError(result.error);

@@ -10,10 +10,11 @@ import { HamburgerButton } from './src/components/HamburgerButton';
 import { SpeedSlider } from './src/components/SpeedSlider';
 import { StarField } from './src/components/StarField';
 import { StatusDot } from './src/components/StatusDot';
-import { DEFAULT_SPEED, OBSTACLE_WARNING_CM } from './src/config';
+import { DEFAULT_SPEED } from './src/config';
 import { useDrive } from './src/hooks/useDrive';
 import { useRobotStatus } from './src/hooks/useRobotStatus';
-import { SettingsProvider } from './src/settings';
+import { isObstacleNear } from './src/robot/types';
+import { SettingsProvider, useSettings } from './src/settings';
 import { colors, fonts } from './src/theme';
 
 /** Height of the top row (hamburger + status dot); safe-area padding is added on top. */
@@ -37,6 +38,7 @@ function Cockpit() {
   // Off on every launch — deliberately not persisted.
   const [cameraVisible, setCameraVisible] = useState(false);
 
+  const { useMock } = useSettings();
   const { link, status, history } = useRobotStatus();
   const drive = useDrive(speed, link);
   const { stop } = drive;
@@ -57,7 +59,8 @@ function Cockpit() {
     landscape ? Math.min(bodyWidth * 0.5, bodyHeight) : Math.min(bodyWidth, bodyHeight * 0.55),
   );
 
-  const near = status !== null && status.distance <= OBSTACLE_WARNING_CM;
+  // The rover decides this: its blocked flag, or a range inside the warning band.
+  const near = isObstacleNear(status);
 
   return (
     <View style={styles.root}>
@@ -97,7 +100,8 @@ function Cockpit() {
         </View>
       </View>
 
-      <FloatingCamera visible={cameraVisible} top={headerHeight + 4} right={insets.right + 12} />
+      {/* The rover has no camera yet, so the box exists in mock mode only. */}
+      <FloatingCamera visible={useMock && cameraVisible} top={headerHeight + 4} right={insets.right + 12} />
 
       <Drawer
         open={menuOpen}
@@ -107,6 +111,7 @@ function Cockpit() {
         status={status}
         link={link}
         history={history}
+        mock={useMock}
       />
 
       {/* Above everything, but never in front of a touch. */}

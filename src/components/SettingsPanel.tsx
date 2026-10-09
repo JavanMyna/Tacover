@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS, isIpv4, useSettings } from '../settings';
 import { colors, eyebrow, fonts, radius } from '../theme';
 import { Panel } from './Panel';
 
-/** Robot and camera addresses, mock mode, and a one-tap reset to config defaults. */
+/** Robot address, mock mode, the reset to config defaults, and (mock only) the camera address. */
 export function SettingsPanel() {
   const { robotIp, cameraIp, useMock, update, reset } = useSettings();
   // Local drafts so a half-typed address is visible without being saved.
@@ -27,12 +27,14 @@ export function SettingsPanel() {
   return (
     <Panel title="Settings" accent="cyan">
       <IpField label="Robot IP" value={robotDraft} onChangeText={onRobot} valid={isIpv4(robotDraft)} />
-      <IpField label="Camera IP" value={cameraDraft} onChangeText={onCamera} valid={isIpv4(cameraDraft)} />
+      {useMock ? (
+        <IpField label="Camera IP" value={cameraDraft} onChangeText={onCamera} valid={isIpv4(cameraDraft)} />
+      ) : null}
 
       <View style={styles.switchRow}>
         <View style={styles.switchCopy}>
           <Text style={eyebrow}>Mock mode</Text>
-          <Text style={styles.hint}>Fake telemetry and camera, no network</Text>
+          <Text style={styles.hint}>{useMock ? 'Fake car, no network' : 'Real rover over Wi-Fi'}</Text>
         </View>
         <Switch
           accessibilityLabel="Mock mode"

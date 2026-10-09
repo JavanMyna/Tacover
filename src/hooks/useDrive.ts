@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { REPEAT_INTERVAL_MS } from '../config';
-import { sendMove, sendStop } from '../robot/client';
+import { sendDrive, sendStop } from '../robot/client';
 import { DriveDir } from '../robot/types';
 import { LinkState } from './useRobotStatus';
 
@@ -10,7 +10,7 @@ export type Drive = {
   active: DriveDir | null;
   press: (dir: DriveDir) => void;
   release: () => void;
-  /** Cancel any held direction and send dir=S right away. */
+  /** Cancel any held direction and send GET /stop right away. */
   stop: () => void;
   /** False while the telemetry link is known dead — the pad is locked out. */
   enabled: boolean;
@@ -19,7 +19,7 @@ export type Drive = {
 /**
  * Hold-to-drive. Pressing sends the command immediately and then resends it
  * every REPEAT_INTERVAL_MS; releasing, backgrounding the app, leaving the
- * screen, or losing the link all send dir=S right away.
+ * screen, or losing the link all send GET /stop right away.
  *
  * The repeat loop is cancelled by bumping a generation counter rather than by
  * clearing a stored interval handle: whatever tick is already scheduled sees a
@@ -40,7 +40,7 @@ export function useDrive(speed: number, link: LinkState): Drive {
     loopRef.current += 1;
     activeRef.current = null;
     setActive(null);
-    sendStop(speedRef.current);
+    sendStop();
   }, []);
 
   const press = useCallback((dir: DriveDir) => {
@@ -48,14 +48,14 @@ export function useDrive(speed: number, link: LinkState): Drive {
 
     activeRef.current = dir;
     setActive(dir);
-    sendMove(dir, speedRef.current);
+    sendDrive(dir, speedRef.current);
 
     loopRef.current += 1;
     const generation = loopRef.current;
     const repeat = () => {
       if (loopRef.current !== generation) return;
       const held = activeRef.current;
-      if (held !== null) sendMove(held, speedRef.current);
+      if (held !== null) sendDrive(held, speedRef.current);
       setTimeout(repeat, REPEAT_INTERVAL_MS);
     };
     setTimeout(repeat, REPEAT_INTERVAL_MS);
@@ -84,7 +84,7 @@ export function useDrive(speed: number, link: LinkState): Drive {
     () => () => {
       loopRef.current += 1;
       activeRef.current = null;
-      sendStop(speedRef.current);
+      sendStop();
     },
     [],
   );

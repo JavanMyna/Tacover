@@ -1,17 +1,16 @@
 import {
-  MAX_SPEED,
-  MIN_SPEED,
-  MOVE_PARAMS,
-  MOVE_TIMEOUT_MS,
-  MOVE_URL,
+  DRIVE_PARAMS,
+  DRIVE_TIMEOUT_MS,
+  DRIVE_URL,
   REPEAT_INTERVAL_MS,
   ROBOT_IP,
   STATUS_TIMEOUT_MS,
   STATUS_URL,
+  STOP_URL,
   USE_MOCK,
 } from '../config';
-import { mockDelay, mockMove, mockShouldFail, mockStatus } from './mock';
-import { MoveDir, parseStatus, RobotStatus } from './types';
+import { mockDelay, mockDrive, mockShouldFail, mockStatus, mockStop } from './mock';
+import { DriveDir, DriveVector, driveVector, parseStatus, RobotStatus } from './types';
 
 export type StatusResult = { ok: true; status: RobotStatus } | { ok: false; error: string };
 
@@ -65,11 +64,12 @@ export async function fetchStatus(): Promise<StatusResult> {
 }
 
 /**
- * The direction currently on the wire. A repeat of a command that is already
- * in flight is skipped instead of queueing behind a slow robot; a *different*
+ * The command currently on the wire, as "x,y" (or "stop"). A repeat of a
+ * command that is already in flight is skipped instead of queueing behind a
+ * slow board, so the 100 ms cadence can never pile requests up; a *different*
  * command — notably the safety stop — always goes out immediately.
  */
-let inFlight: MoveDir | null = null;
+let inFlight: string | null = null;
 
 /**
  * Bumped by every command. Pending stop repeats capture the value at schedule
@@ -78,53 +78,63 @@ let inFlight: MoveDir | null = null;
  */
 let commandGeneration = 0;
 
-/** Fire one GET /move and update inFlight; never de-duplicates. */
-function dispatchMove(dir: MoveDir, speed: number): void {
-  const clamped = Math.max(MIN_SPEED, Math.min(MAX_SPEED, Math.round(speed)));
-  const url = `${MOVE_URL(config.robotIp)}?${MOVE_PARAMS.direction}=${dir}&${MOVE_PARAMS.speed}=${clamped}`;
-
-  inFlight = dir;
-  // Same AbortController pattern as getJson: a silent robot must not be able to
-  // pin `inFlight` open, or repeats of this direction would be skipped forever.
+/** Fire one GET and hold the de-duplication marker until it settles. */
+function fire(url: string, key: string, timeoutMs: number): void {
+  inFlight = key;
+  // A silent board must not be able to pin the marker open, or repeats of this
+  // command would be skipped forever.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MOVE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   fetch(url, { method: 'GET', headers: { Accept: '*/*' }, signal: controller.signal })
     .catch(() => undefined)
     .finally(() => {
       clearTimeout(timer);
-      if (inFlight === dir) inFlight = null;
+      if (inFlight === key) inFlight = null;
     });
 }
 
-export function sendMove(dir: MoveDir, speed: number): void {
+/** Fire one GET /drive; the caller owns de-duplication. */
+function dispatchDrive(vector: DriveVector): void {
+  const key = `${vector.x},${vector.y}`;
+  const url = `${DRIVE_URL(config.robotIp)}?${DRIVE_PARAMS.turn}=${vector.x}&${DRIVE_PARAMS.forward}=${vector.y}`;
+  fire(url, key, DRIVE_TIMEOUT_MS);
+}
+
+/**
+ * How the pad drives the rover: the held direction plus the speed slider become
+ * x (turn) and y (forward). Repeated every REPEAT_INTERVAL_MS while held.
+ */
+export function sendDrive(dir: DriveDir, speed: number): void {
+  const vector = driveVector(dir, speed);
   if (config.useMock) {
-    mockMove(dir, speed);
+    mockDrive(vector);
     return;
   }
   // Any newer command invalidates stop repeats already queued.
   commandGeneration += 1;
-  if (inFlight === dir) return;
-  dispatchMove(dir, speed);
+  const key = `${vector.x},${vector.y}`;
+  if (inFlight === key) return;
+  dispatchDrive(vector);
 }
 
 /**
- * Safety stop. dir=S goes out immediately and again after roughly 100 ms and
- * 200 ms, because a single lost GET would leave the car driving. Each attempt
- * bypasses the inFlight de-duplication, and the delayed repeats are cancelled
- * the moment any newer move command is sent.
+ * Safety stop. GET /stop goes out immediately and again after roughly 100 ms
+ * and 200 ms, because a single lost GET would leave the car driving. Each
+ * attempt bypasses the in-flight de-duplication, and the delayed repeats are
+ * cancelled the moment any newer move command is sent.
  */
-export function sendStop(speed: number): void {
+export function sendStop(): void {
   if (config.useMock) {
-    mockMove('S', speed);
+    mockStop();
     return;
   }
   commandGeneration += 1;
   const generation = commandGeneration;
-  dispatchMove('S', speed);
+  fire(STOP_URL(config.robotIp), 'stop', DRIVE_TIMEOUT_MS);
   for (const attempt of [1, 2]) {
     setTimeout(() => {
       if (commandGeneration !== generation) return;
-      dispatchMove('S', speed);
+      fire(STOP_URL(config.robotIp), 'stop', DRIVE_TIMEOUT_MS);
     }, attempt * REPEAT_INTERVAL_MS);
   }
 }
