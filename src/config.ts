@@ -70,8 +70,11 @@ export const STATUS_TIMEOUT_MS = 1500;
 /** Consecutive failed /status calls that flip the link to "offline". */
 export const FAILURES_BEFORE_OFFLINE = 2;
 
-/** Distance (cm) at or below which the obstacle warning appears, even if /status has not set blocked. */
-export const OBSTACLE_WARNING_CM = 15;
+/**
+ * Distance (cm) at or below which the obstacle warning appears, even if /status has not set blocked.
+ * Sits above the firmware's 20 cm forward-halt so the glow leads the stop by ~10 cm of coast.
+ */
+export const OBSTACLE_WARNING_CM = 30;
 /** Temperature readings kept for the chart (mock mode only — the rover has no probe yet). */
 export const HISTORY_SIZE = 60;
 

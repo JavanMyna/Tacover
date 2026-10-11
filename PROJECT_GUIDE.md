@@ -168,7 +168,7 @@ GET http://192.168.4.2:81/stream                           # mock camera only
 | `STATUS_POLL_MS` | `500` | `/status` cadence |
 | `STATUS_TIMEOUT_MS` | `1500` | slow answer = failure |
 | `FAILURES_BEFORE_OFFLINE` | `2` | failed polls before red link |
-| `OBSTACLE_WARNING_CM` | `15` | edge-glow threshold |
+| `OBSTACLE_WARNING_CM` | `30` | edge-glow threshold |
 | `HISTORY_SIZE` | `60` | chart samples (mock mode only) |
 | `CAMERA_BOX_DEFAULT_WIDTH` | `240` | floating camera width (4:3 aspect preserved) |
 | `CAMERA_BOX_MIN_WIDTH` | `140` | smallest floating camera |

@@ -1,0 +1,870 @@
+<!doctype html>
+<!--
+  Tacover rover remote — single-file page served by the rover's ESP32 web server.
+  Everything (markup, styles, script, icons) is inline: no CDN, no fonts, no
+  images, no frameworks. It talks to the firmware on the same origin with
+  relative URLs only: /drive, /stop, /status.
+
+  Ported from the Expo app (src/theme.ts colours, radii; DPad, EdgeGlow,
+  FloatingCamera, Drawer, TempChart, SettingsPanel). Firmware contract lives in
+  esp32-ui/../Arduino/roverDraft2-sketch: MIN_DUTY 90 (wire 1..100),
+  FAILSAFE_MS 500, STOP_CM 20. /status carries distance/blocked/left/right only;
+  temperature is optional and drives the trend chart when a build sends it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Tacover Rover</title>
+<style>
+  /* Palette lifted from src/theme.ts; glow halved so the HUD reads calmer. */
+  :root{
+    --bg:#05060E;--bg2:#02030A;--panel:#0A0F22;--panel2:#101733;--edge:#1D2750;--edge2:#2E3D78;
+    --cyan:#4FC8E0;--purple:#9A7BD1;--ok:#3DFFA2;--warn:#FFC24B;--danger:#FF3B5C;
+    --text:#DCE6FF;--dim:#8496C4;--faint:#56628C;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{
+    position:fixed;inset:0;margin:0;height:100%;overflow:hidden;
+    background:var(--bg);color:var(--text);font-family:var(--sans);
+    overscroll-behavior:none;touch-action:none;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+  }
+  body{display:flex;flex-direction:column}
+  .hidden{display:none !important}
+  .eyebrow,.lbl{font-size:10px;letter-spacing:1.8px;font-weight:700;text-transform:uppercase;color:var(--faint)}
+
+  /* Ambient depth: two off-screen nebulae and a fixed star field (StarField). */
+  #stars{position:fixed;inset:0;overflow:hidden;pointer-events:none}
+  #stars i{position:absolute;border-radius:50%}
+  #stars .neb{width:320px;height:320px}
+
+  header{
+    display:flex;align-items:center;justify-content:space-between;height:48px;flex:0 0 auto;
+    padding:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 16px) 0 calc(env(safe-area-inset-left) + 16px);
+  }
+  .hamb{
+    width:46px;height:46px;padding:0;border:1px solid var(--edge);border-radius:16px;background:var(--panel);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;touch-action:none;
+  }
+  .hamb span{display:block;width:22px;height:2.4px;border-radius:2px;background:var(--text)}
+  .hamb.press{background:var(--panel2);border-color:var(--edge2)}
+  .status{display:flex;align-items:center;justify-content:flex-end;width:46px;height:46px}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--warn);box-shadow:0 0 6px var(--warn)}
+  .dot.ok{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+  .dot.bad{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+
+  main{
+    flex:1;min-height:0;min-width:0;display:flex;gap:14px;align-items:center;justify-content:center;
+    padding:0 calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 16px);
+  }
+  .padwrap{display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;container-type:size}
+  .pad{
+    display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);aspect-ratio:1;
+    width:min(100%,88vmin);height:min(100%,88vmin);
+  }
+  @supports (width:1cqw){.pad{width:min(100cqw,100cqh);height:min(100cqw,100cqh)}}
+  .slot{padding:4px;min-width:0;min-height:0}
+  .dir{
+    width:100%;height:100%;padding:0;font:inherit;color:var(--text);
+    border:1px solid var(--edge2);border-radius:16px;background:var(--panel2);
+    display:flex;align-items:center;justify-content:center;touch-action:none;
+    transition:transform .07s,background .07s,border-color .07s,box-shadow .07s;
+  }
+  .dir svg,.stopper svg{width:34px;height:34px;display:block;pointer-events:none}
+  /* Press feedback only: always bright, never dimmed. */
+  .dir.press{background:rgba(79,200,224,.22);border-color:var(--cyan);box-shadow:0 0 8px rgba(79,200,224,.35);transform:scale(.94)}
+  .stopper{
+    width:100%;height:100%;padding:0;font:inherit;color:var(--danger);
+    border:1px solid var(--danger);border-radius:999px;background:rgba(255,59,92,.14);
+    display:flex;align-items:center;justify-content:center;touch-action:none;
+    transition:transform .07s,background .07s;
+  }
+  .stopper svg{width:36px;height:36px}
+  .stopper.press{background:rgba(255,59,92,.32);transform:scale(.93)}
+
+  .gears{display:flex;gap:8px}
+  .gears button{
+    flex:1;min-height:46px;padding:0 8px;font-family:var(--sans);font-size:11px;font-weight:700;
+    letter-spacing:1.1px;text-transform:uppercase;color:var(--dim);touch-action:none;
+    border:1px solid var(--edge);border-radius:14px;background:var(--panel);
+    transition:color .12s,background .12s,border-color .12s;
+  }
+  .gears button.active{color:var(--cyan);border-color:var(--cyan);background:rgba(79,200,224,.14)}
+  .gears button.press{background:var(--panel2)}
+
+  /* Obstacle warning: three stacked rims, soft fade (EdgeGlow.tsx). */
+  #glow{position:fixed;inset:0;z-index:40;pointer-events:none;opacity:0;transition:opacity .6s ease}
+  #glow.on{opacity:1;transition-duration:.45s}
+  #glow i{position:absolute;inset:0;border-style:solid;border-color:var(--danger)}
+  #glow i:nth-child(1){border-width:20px;border-radius:30px;opacity:.09}
+  #glow i:nth-child(2){border-width:10px;border-radius:24px;opacity:.15}
+  #glow i:nth-child(3){border-width:3px;border-radius:20px;opacity:.34}
+
+  #toast{
+    position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 22px);transform:translateX(-50%);
+    z-index:60;padding:8px 14px;border:1px solid var(--edge2);border-radius:999px;
+    background:rgba(10,15,34,.94);font-family:var(--mono);font-size:12px;color:var(--dim);
+    opacity:0;pointer-events:none;
+  }
+  #toast.show{animation:toastFade 1.6s ease forwards}
+  @keyframes toastFade{0%{opacity:0}12%{opacity:1}70%{opacity:1}100%{opacity:0}}
+
+  /* Drawer: slides in from the left (Drawer.tsx). */
+  .drawer{position:fixed;inset:0;z-index:70;pointer-events:none}
+  .drawer .backdrop{position:absolute;inset:0;background:rgba(2,3,10,.66);opacity:0;transition:opacity .22s}
+  .drawer .sheet{
+    position:absolute;top:0;bottom:0;left:0;width:min(86vw,360px);background:var(--bg);
+    border-right:1px solid var(--edge);display:flex;flex-direction:column;
+    padding-top:calc(env(safe-area-inset-top) + 14px);
+    transform:translateX(-102%);transition:transform .26s cubic-bezier(.2,.8,.2,1);
+  }
+  .drawer.open{pointer-events:auto}
+  .drawer.open .backdrop{opacity:1}
+  .drawer.open .sheet{transform:none}
+  .sheet .title{padding:0 16px 10px}
+  .sheet-scroll{
+    flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;-webkit-overflow-scrolling:touch;
+    padding:0 16px calc(env(safe-area-inset-bottom) + 24px);display:flex;flex-direction:column;gap:12px;
+  }
+
+  /* A titled slab of the HUD, mirroring Panel.tsx. */
+  .panel{background:var(--panel);border:1px solid var(--edge);border-radius:24px;padding:12px 14px}
+  .head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .sub{font-family:var(--mono);font-size:10px;letter-spacing:.6px;color:var(--faint);white-space:nowrap}
+  .rule{height:1px;margin-top:8px;border-radius:1px;opacity:.5}
+  .rule.cyan{background:var(--cyan)} .rule.purple{background:var(--purple)} .rule.danger{background:var(--danger)}
+  .body{margin-top:10px}
+  .row{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+  .row+.row{margin-top:9px;padding-top:9px;border-top:1px solid var(--edge)}
+  .v{font-family:var(--mono);font-size:20px;font-weight:600}
+  .v small{font-size:11px;color:var(--faint);margin-left:3px}
+
+  .setrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .setrow.mt{margin-top:14px}
+  .hint{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px}
+  .field{margin-top:12px}
+  .field input{
+    width:100%;margin-top:6px;font-family:var(--mono);font-size:14px;color:var(--text);
+    background:var(--bg2);border:1px solid var(--edge);border-radius:10px;padding:9px 10px;
+    touch-action:auto;-webkit-user-select:text;user-select:text;
+  }
+  .field input.bad{border-color:var(--danger)}
+  .toggle{
+    appearance:none;-webkit-appearance:none;flex:0 0 auto;width:42px;height:24px;margin:0;position:relative;
+    border:1px solid var(--edge2);border-radius:999px;background:var(--edge);transition:background .15s,border-color .15s;
+  }
+  .toggle::after{
+    content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+    background:var(--dim);transition:transform .15s,background .15s;
+  }
+  .toggle:checked{background:rgba(79,200,224,.22);border-color:var(--cyan)}
+  .toggle:checked::after{transform:translateX(18px);background:var(--cyan)}
+
+  #chartWrap{position:relative;height:92px}
+  #chart{width:100%;height:92px;display:block}
+  #chartEmpty{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;color:var(--faint);
+  }
+
+  /* Floating camera, pinned top-right over the controls (FloatingCamera.tsx). */
+  #camBox{
+    position:fixed;top:calc(env(safe-area-inset-top) + 58px);right:calc(env(safe-area-inset-right) + 12px);
+    z-index:30;overflow:hidden;border:1px solid var(--edge2);border-radius:16px;background:var(--bg2);
+  }
+  #camImg{width:100%;height:100%;object-fit:contain;display:block;background:var(--bg2)}
+  #camOff{
+    position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    background:var(--bg2);font-family:var(--mono);font-size:11px;color:var(--dim);
+  }
+  #camOff button{
+    font-family:var(--mono);font-size:11px;color:var(--cyan);padding:6px 14px;
+    border:1px solid var(--cyan);border-radius:999px;background:rgba(79,200,224,.1);
+  }
+  #camLock{
+    position:absolute;top:6px;left:6px;width:28px;height:28px;padding:0;border:1px solid var(--edge);
+    border-radius:10px;background:rgba(2,3,10,.72);color:var(--dim);
+    display:flex;align-items:center;justify-content:center;
+  }
+  #camLock svg{width:16px;height:16px;pointer-events:none}
+  #camLock.on{border-color:var(--purple);color:var(--purple)}
+  #camHandle{
+    position:absolute;left:0;bottom:0;width:44px;height:44px;padding:0 4px 4px 0;
+    display:flex;align-items:flex-end;justify-content:flex-end;color:var(--dim);touch-action:none;
+  }
+  #camHandle svg{width:14px;height:14px;pointer-events:none}
+
+  /* Portrait stacks pad above gears; landscape puts gears in a left column. */
+  @media (orientation:portrait){
+    main{flex-direction:column}
+    .padwrap{flex:1;width:100%}
+    .gears{width:100%;flex:0 0 auto}
+  }
+  @media (orientation:landscape){
+    main{flex-direction:row}
+    .gears{flex:0 0 auto;flex-direction:column;width:104px;align-self:stretch;justify-content:center;order:1}
+    .gears button{flex:0 0 auto;min-height:56px}
+    .padwrap{flex:1;height:100%;order:2}
+  }
+</style>
+</head>
+<body>
+<div id="stars" aria-hidden="true"></div>
+
+<!-- Obstacle edge glow: inert to touches, always above the HUD. -->
+<div id="glow" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<header>
+  <button id="menu" class="hamb" type="button" aria-label="Open menu"><span></span><span></span><span></span></button>
+  <span class="status"><span id="conn" class="dot" role="status" aria-label="Connecting"></span></span>
+</header>
+
+<main>
+  <div class="padwrap">
+    <div class="pad" id="pad">
+      <div class="slot"></div>
+      <div class="slot"><button class="dir" type="button" data-dir="F" aria-label="Forward"><svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16 L15 8 L23 16"/></svg></button></div>
+      <div class="slot"></div>
+      <div class="slot"><button class="dir" type="button" data-dir="L" aria-label="Left"><svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 7 L8 15 L16 23"/></svg></button></div>
+      <div class="slot"><button class="stopper" id="stop" type="button" aria-label="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg></button></div>
+      <div class="slot"><button class="dir" type="button" data-dir="R" aria-label="Right"><svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 7 L22 15 L14 23"/></svg></button></div>
+      <div class="slot"></div>
+      <div class="slot"><button class="dir" type="button" data-dir="B" aria-label="Reverse"><svg viewBox="0 0 30 30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14 L15 22 L23 14"/></svg></button></div>
+      <div class="slot"></div>
+    </div>
+  </div>
+  <div class="gears" id="gears" role="group" aria-label="Gear">
+    <button type="button" data-gear="30" aria-pressed="false">Crawl</button>
+    <button type="button" data-gear="55" aria-pressed="false">Cruise</button>
+    <button type="button" data-gear="80" aria-pressed="false">Fast</button>
+    <button type="button" data-gear="100" aria-pressed="false">Boost</button>
+  </div>
+</main>
+
+<div id="camBox" class="hidden" aria-hidden="true">
+  <img id="camImg" alt="">
+  <div id="camOff" class="hidden"><span>Camera offline</span><button id="camRetry" type="button">Retry</button></div>
+  <button id="camLock" type="button" aria-label="Lock size"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="4" y="9" width="12" height="8" rx="1.6"/><path id="camShackle" d="M6.8 9 V6.6 a3.2 3.2 0 0 1 6.4 0"/></svg></button>
+  <div id="camHandle" aria-label="Resize camera"><svg viewBox="0 0 14 14"><path d="M2 12 L12 2 M2 7 L7 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+</div>
+
+<div id="drawer" class="drawer" aria-hidden="true">
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="sheet" id="sheet">
+    <div class="eyebrow title">Menu</div>
+    <div class="sheet-scroll">
+      <section class="panel">
+        <div class="head"><span class="eyebrow">Camera</span><span class="sub">MJPEG</span></div>
+        <div class="rule purple"></div>
+        <div class="body setrow">
+          <div><div class="lbl">Show camera</div><div class="hint">Floating feed, top right</div></div>
+          <input type="checkbox" class="toggle" id="camToggle" aria-label="Show camera">
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="head"><span class="eyebrow">Telemetry</span><span class="sub" id="teleSub">no data</span></div>
+        <div class="rule cyan" id="teleRule"></div>
+        <div class="body">
+          <div class="row"><span class="k lbl">Obstacle</span><span class="v" id="vDist">--</span></div>
+          <div class="row"><span class="k lbl">Blocked</span><span class="v" id="vBlocked">--</span></div>
+          <div class="row"><span class="k lbl">Left</span><span class="v" id="vLeft">--</span></div>
+          <div class="row"><span class="k lbl">Right</span><span class="v" id="vRight">--</span></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="head"><span class="eyebrow">Temperature trend</span><span class="sub" id="chartSub">--</span></div>
+        <div class="rule purple"></div>
+        <div class="body"><div id="chartWrap"><canvas id="chart"></canvas><span id="chartEmpty">Collecting&hellip;</span></div></div>
+      </section>
+
+      <section class="panel">
+        <div class="head"><span class="eyebrow">Settings</span></div>
+        <div class="rule cyan"></div>
+        <div class="body">
+          <div class="field">
+            <div class="lbl">Robot address</div>
+            <input id="setRobot" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.4.1">
+            <div class="hint">Blank = this ESP32 (same origin)</div>
+          </div>
+          <div class="field">
+            <div class="lbl">Camera address</div>
+            <input id="setCamera" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.4.50">
+            <div class="hint">Port 81, path /stream</div>
+          </div>
+          <div class="setrow mt">
+            <div><div class="lbl">Mock mode</div><div class="hint" id="mockHint">Fake car, no network</div></div>
+            <input type="checkbox" class="toggle" id="setMock" aria-label="Mock mode">
+          </div>
+        </div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<div id="toast" role="status">Not connected</div>
+
+<script>
+"use strict";
+(function () {
+  /* ── tunables ─────────────────────────────────────────────────────────── */
+  var POLL_MS = 500;
+  var POLL_TIMEOUT_MS = 1500;
+  var FAILS_TO_OFFLINE = 2;            /* src/config.ts FAILURES_BEFORE_OFFLINE */
+  var REPEAT_MS = 150;                 /* firmware FAILSAFE_MS is 500 ms */
+  var DRIVE_TIMEOUT_MS = 400;
+  var OBSTACLE_CM = 20;                /* firmware STOP_CM */
+  var GEARS = [[30, "Crawl"], [55, "Cruise"], [80, "Fast"], [100, "Boost"]];
+  var DEFAULT_GEAR = 55;
+  var CAM_PORT = 81, CAM_PATH = "/stream", CAM_ASPECT = 4 / 3, CAM_MIN_W = 140;
+  var FRAME_TIMEOUT_MS = 8000;
+  var HISTORY = 60;
+  var DIRS = { F: [0, 1], B: [0, -1], L: [-1, 0], R: [1, 0] };
+  var STORE_KEY = "tacover.esp32.v1", GEAR_KEY = "tacover.esp32.gear";
+
+  /* ── DOM ──────────────────────────────────────────────────────────────── */
+  function byId(id) { return document.getElementById(id); }
+  var elConn = byId("conn"), elPad = byId("pad"), elStop = byId("stop"), elGears = byId("gears");
+  var elToast = byId("toast"), elGlow = byId("glow"), elMenu = byId("menu");
+  var elDrawer = byId("drawer"), elBackdrop = byId("backdrop");
+  var elRobot = byId("setRobot"), elCamera = byId("setCamera"), elMock = byId("setMock"), elMockHint = byId("mockHint");
+  var elCamBox = byId("camBox"), elCamImg = byId("camImg"), elCamOff = byId("camOff");
+  var elCamRetry = byId("camRetry"), elCamLock = byId("camLock"), elCamShackle = byId("camShackle");
+  var elCamHandle = byId("camHandle"), elCamToggle = byId("camToggle");
+  var elDist = byId("vDist"), elBlocked = byId("vBlocked"), elLeft = byId("vLeft"), elRight = byId("vRight");
+  var elTeleSub = byId("teleSub"), elTeleRule = byId("teleRule");
+  var elChart = byId("chart"), elChartEmpty = byId("chartEmpty"), elChartSub = byId("chartSub");
+
+  /* ── persisted settings (localStorage, per-field fallback) ────────────── */
+  var DEFAULTS = { robot: "", camera: "192.168.4.50", mock: false, camW: 240, camLock: false };
+  function isDigits(s) {
+    if (s.length === 0) return false;
+    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); if (c < 48 || c > 57) return false; }
+    return true;
+  }
+  function isIpv4(v) {
+    var p = String(v).split(".");
+    if (p.length !== 4) return false;
+    for (var i = 0; i < 4; i++) { if (!isDigits(p[i]) || p[i].length > 3 || Number(p[i]) > 255) return false; }
+    return true;
+  }
+  /* "" = same origin; otherwise an IPv4 (optionally host:port) or "localhost". */
+  function isHost(v) {
+    v = String(v == null ? "" : v).trim();
+    if (v === "" || v === "localhost") return true;
+    var host = v, port = "", cut = v.lastIndexOf(":");
+    if (cut >= 0) { host = v.slice(0, cut); port = v.slice(cut + 1); if (!isDigits(port) || Number(port) > 65535) return false; }
+    return isIpv4(host) || host === "localhost";
+  }
+  function loadSettings() {
+    var body = null, raw = null;
+    try { raw = window.localStorage.getItem(STORE_KEY); } catch (e) {}
+    if (raw) { try { body = JSON.parse(raw); } catch (e) {} }
+    if (body === null || typeof body !== "object") body = {};
+    return {
+      robot: typeof body.robot === "string" && isHost(body.robot) ? body.robot.trim() : DEFAULTS.robot,
+      camera: typeof body.camera === "string" && isHost(body.camera) && body.camera.trim() !== ""
+        ? body.camera.trim() : DEFAULTS.camera,
+      mock: typeof body.mock === "boolean" ? body.mock : DEFAULTS.mock,
+      camW: typeof body.camW === "number" && isFinite(body.camW) && body.camW >= CAM_MIN_W ? body.camW : DEFAULTS.camW,
+      camLock: typeof body.camLock === "boolean" ? body.camLock : DEFAULTS.camLock
+    };
+  }
+  function saveSettings() {
+    try { window.localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) {}
+  }
+  var settings = loadSettings();
+  function robotUrl(path) { return (settings.robot === "" ? "" : "http://" + settings.robot) + path; }
+  function cameraUrl() {
+    var host = settings.camera, port = String(CAM_PORT), cut = host.lastIndexOf(":");
+    if (cut >= 0) { port = host.slice(cut + 1); host = host.slice(0, cut); }
+    return "http://" + host + ":" + port + CAM_PATH;
+  }
+
+  /* ── robot client (src/robot/client.ts) ───────────────────────────────── */
+  var inFlight = null, generation = 0;
+  function fire(url, key, timeoutMs) {
+    inFlight = key;
+    var ctrl = null, timer = null, opts = { method: "GET", cache: "no-store" };
+    if (typeof AbortController !== "undefined") {
+      ctrl = new AbortController();
+      opts.signal = ctrl.signal;
+      timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
+    }
+    fetch(url, opts)
+      .then(
+        function (res) { if (res && res.text) res.text().catch(function () {}); },
+        function () {}
+      )
+      .then(function () {
+        if (timer) clearTimeout(timer);
+        if (inFlight === key) inFlight = null;
+      });
+  }
+  function driveVector(dir, speed) {
+    var m = Math.max(0, Math.min(100, Math.round(speed))), a = DIRS[dir];
+    return { x: a[0] * m, y: a[1] * m };
+  }
+  function sendDrive(dir, speed) {
+    if (settings.mock || !connected()) return;
+    var v = driveVector(dir, speed), key = v.x + "," + v.y;
+    generation += 1;                      /* a move invalidates queued stop retries */
+    if (inFlight === key) return;         /* same command already on the wire */
+    fire(robotUrl("/drive?x=" + v.x + "&y=" + v.y), key, DRIVE_TIMEOUT_MS);
+  }
+  function sendStop() {
+    if (settings.mock) return;
+    generation += 1;
+    var g = generation;
+    fire(robotUrl("/stop"), "stop", DRIVE_TIMEOUT_MS);
+    [1, 2].forEach(function (n) {
+      setTimeout(function () { if (generation === g) fire(robotUrl("/stop"), "stop", DRIVE_TIMEOUT_MS); }, n * REPEAT_MS);
+    });
+  }
+
+  /* ── /status parsing (src/robot/types.ts) ─────────────────────────────── */
+  function num(v) {
+    if (typeof v === "number" && isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "") { var n = Number(v); if (isFinite(n)) return n; }
+    return null;
+  }
+  function parseStatus(raw) {
+    if (raw === null || typeof raw !== "object") return null;
+    var d = num(raw.distance), l = num(raw.left), r = num(raw.right), b = raw.blocked;
+    if (d === null || l === null || r === null || typeof b !== "boolean") return null;
+    return { distance: d, blocked: b, left: l, right: r, temperature: num(raw.temperature) };
+  }
+  function isObstacleNear(s) { return !!s && (s.blocked || (s.distance >= 0 && s.distance <= OBSTACLE_CM)); }
+
+  /* ── state ────────────────────────────────────────────────────────────── */
+  var link = "connecting";     /* connecting | online | offline */
+  var status = null, fails = 0, tempMode = null, history = [];
+  var active = null, activePid = null, repeatGen = 0, holds = {};
+  var gear = (function () {
+    var raw = null;
+    try { raw = window.localStorage.getItem(GEAR_KEY); } catch (e) {}
+    var n = Number(raw);
+    for (var i = 0; i < GEARS.length; i++) if (GEARS[i][0] === n) return n;
+    return DEFAULT_GEAR;
+  })();
+  function connected() { return link !== "offline"; }
+
+  /* ── rendering ────────────────────────────────────────────────────────── */
+  function paintConn() {
+    elConn.className = "dot" + (link === "online" ? " ok" : link === "offline" ? " bad" : "");
+    elConn.setAttribute("aria-label", link === "online" ? "Connected" : link === "offline" ? "Disconnected" : "Connecting");
+  }
+  function paintPad() {
+    var btns = elPad.querySelectorAll(".dir");
+    for (var i = 0; i < btns.length; i++) {
+      var b = btns[i], on = false;
+      for (var pid in holds) { if (holds[pid].el === b) { on = true; break; } }
+      b.classList.toggle("press", on);
+    }
+  }
+  function paintStatus() {
+    var near = isObstacleNear(status);
+    elGlow.classList.toggle("on", near);
+    elTeleRule.className = "rule " + (near ? "danger" : "cyan");
+    elTeleSub.textContent = link === "online" ? "live \u00b7 0.5 s" : link === "offline" ? "disconnected" : "no data";
+    if (!status) {
+      elDist.innerHTML = "--"; elBlocked.textContent = "--"; elLeft.textContent = "--"; elRight.textContent = "--";
+      elDist.style.color = "var(--text)"; elBlocked.style.color = "var(--text)";
+      return;
+    }
+    var d = status.distance >= 0 ? Math.round(status.distance) : null;
+    elDist.innerHTML = d === null ? "--" : d + '<small>cm</small>';
+    elDist.style.color = near ? "var(--danger)" : "var(--text)";
+    elBlocked.textContent = status.blocked ? "YES" : "NO";
+    elBlocked.style.color = status.blocked ? "var(--danger)" : "var(--ok)";
+    elLeft.textContent = String(Math.round(status.left));
+    elRight.textContent = String(Math.round(status.right));
+  }
+  function paintGear() {
+    var btns = elGears.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var on = Number(btns[i].getAttribute("data-gear")) === gear;
+      btns[i].classList.toggle("active", on);
+      btns[i].setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+  function toast() {
+    elToast.classList.remove("show");
+    void elToast.offsetWidth;             /* restart the fade-out animation */
+    elToast.classList.add("show");
+  }
+
+  /* ── status poll loop (src/hooks/useRobotStatus.ts) ───────────────────── */
+  function online(s) {
+    fails = 0;
+    status = s;
+    if (s.temperature === null) tempMode = false;
+    else { tempMode = true; history.push(s.temperature); if (history.length > HISTORY) history.shift(); }
+    if (link !== "online") { link = "online"; paintConn(); }
+    paintStatus();
+    drawChart();
+  }
+  function offlineTick() {
+    fails += 1;
+    if (fails >= FAILS_TO_OFFLINE && link !== "offline") {
+      link = "offline";
+      safetyStop();                        /* losing the link is a safety stop */
+      paintConn();
+      paintStatus();
+    }
+  }
+  function poll() {
+    if (settings.mock) { mockStatus(); setTimeout(poll, POLL_MS); return; }
+    var ctrl = null, timer = null, opts = { method: "GET", cache: "no-store" };
+    if (typeof AbortController !== "undefined") {
+      ctrl = new AbortController();
+      opts.signal = ctrl.signal;
+      timer = setTimeout(function () { ctrl.abort(); }, POLL_TIMEOUT_MS);
+    }
+    fetch(robotUrl("/status"), opts)
+      .then(function (res) { if (!res.ok) throw new Error("http"); return res.text(); })
+      .then(function (text) {
+        var body = null;
+        try { body = JSON.parse(text); } catch (e) { throw new Error("json"); }
+        var s = parseStatus(body);
+        if (!s) throw new Error("shape");
+        online(s);
+      })
+      .catch(function () { offlineTick(); })
+      .then(function () { if (timer) clearTimeout(timer); setTimeout(poll, POLL_MS); });
+  }
+
+  /* ── hold-to-drive (src/hooks/useDrive.ts) ────────────────────────────── */
+  function activate(pid) {
+    var h = holds[pid];
+    if (!h) return;
+    activePid = pid;
+    active = h.dir;
+    repeatGen += 1;
+    var g = repeatGen;
+    sendDrive(active, gear);
+    (function loop() {
+      setTimeout(function () {
+        if (repeatGen !== g) return;       /* cancelled by release/safety stop */
+        if (active !== null) sendDrive(active, gear);
+        loop();
+      }, REPEAT_MS);
+    })();
+  }
+  function stopAll() {
+    for (var pid in holds) { if (holds[pid].el) holds[pid].el.classList.remove("press"); }
+    holds = {};
+    active = null; activePid = null; repeatGen += 1;
+    sendStop();
+    paintPad();
+  }
+  function safetyStop() { stopAll(); elStop.classList.remove("press"); }
+
+  elPad.addEventListener("pointerdown", function (e) {
+    var btn = e.target.closest ? e.target.closest(".dir") : null;
+    if (!btn) return;
+    e.preventDefault();
+    btn.classList.add("press");
+    if (!connected()) { toast(); return; }
+    var dir = btn.getAttribute("data-dir");
+    for (var pid in holds) if (holds[pid].dir === dir && holds[pid].el !== btn) holds[pid].el = btn;
+    holds[e.pointerId] = { dir: dir, el: btn };
+    activate(e.pointerId);
+  });
+  function inside(el, x, y) {
+    var r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+  function releasePid(pid) {
+    var h = holds[pid];
+    if (h) { if (h.el) h.el.classList.remove("press"); delete holds[pid]; }
+    if (activePid === pid) stopAll();
+  }
+  window.addEventListener("pointermove", function (e) {
+    var h = holds[e.pointerId];
+    if (h && h.el && !inside(h.el, e.clientX, e.clientY)) releasePid(e.pointerId);
+  });
+  window.addEventListener("pointerup", function (e) { releasePid(e.pointerId); });
+  window.addEventListener("pointercancel", function (e) { releasePid(e.pointerId); });
+
+  elStop.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    elStop.classList.add("press");
+    if (!connected()) { toast(); return; }
+    stopAll();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(function (t) {
+    elStop.addEventListener(t, function () { elStop.classList.remove("press"); });
+  });
+
+  /* ── gears ────────────────────────────────────────────────────────────── */
+  elGears.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest("button") : null;
+    if (!btn) return;
+    gear = Number(btn.getAttribute("data-gear"));
+    paintGear();
+    try { window.localStorage.setItem(GEAR_KEY, String(gear)); } catch (err) {}
+  });
+
+  /* ── drawer ───────────────────────────────────────────────────────────── */
+  function openDrawer() {
+    safetyStop();                          /* opening the menu stops the car */
+    elDrawer.classList.add("open");
+    elDrawer.setAttribute("aria-hidden", "false");
+    drawChart();
+  }
+  function closeDrawer() {
+    elDrawer.classList.remove("open");
+    elDrawer.setAttribute("aria-hidden", "true");
+  }
+  elMenu.addEventListener("click", openDrawer);
+  elBackdrop.addEventListener("click", closeDrawer);
+  window.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDrawer(); });
+
+  /* ── floating camera (FloatingCamera.tsx) ─────────────────────────────── */
+  var camOpen = false, camW = settings.camW, camLocked = settings.camLock, frameTimer = null;
+  var dragging = false, dragStartW = 0, dragStartX = 0;
+  function camMaxW() {
+    return Math.min(window.innerWidth * 0.5, window.innerHeight * 0.45 * CAM_ASPECT);
+  }
+  function clampCamW(w) {
+    var maxW = camMaxW();
+    return Math.max(Math.min(CAM_MIN_W, maxW), Math.min(maxW, w));
+  }
+  function applyCamSize() {
+    camW = clampCamW(camW);
+    elCamBox.style.width = camW + "px";
+    elCamBox.style.height = (camW / CAM_ASPECT) + "px";
+  }
+  function paintLock() {
+    elCamHandle.classList.toggle("hidden", camLocked);
+    elCamLock.classList.toggle("on", camLocked);
+    elCamLock.setAttribute("aria-label", camLocked ? "Unlock size" : "Lock size");
+    elCamShackle.setAttribute("d", camLocked
+      ? "M6.8 9 V6.6 a3.2 3.2 0 0 1 6.4 0 V9"
+      : "M6.8 9 V6.6 a3.2 3.2 0 0 1 6.4 0");
+  }
+  function showCamOff() {
+    if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+    elCamImg.classList.add("hidden");
+    elCamOff.classList.remove("hidden");
+  }
+  function loadStream() {
+    elCamOff.classList.add("hidden");
+    elCamImg.classList.remove("hidden");
+    elCamImg.removeAttribute("src");       /* drop any half-open stream */
+    if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+    elCamImg.onload = function () {
+      if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+      elCamOff.classList.add("hidden");
+      elCamImg.classList.remove("hidden");
+    };
+    elCamImg.onerror = showCamOff;
+    frameTimer = setTimeout(function () { if (!elCamImg.naturalWidth) showCamOff(); }, FRAME_TIMEOUT_MS);
+    elCamImg.src = cameraUrl();
+  }
+  function setCam(open) {
+    camOpen = open;
+    elCamToggle.checked = open;
+    elCamBox.classList.toggle("hidden", !open);
+    elCamBox.setAttribute("aria-hidden", open ? "false" : "true");
+    if (open) { applyCamSize(); loadStream(); }
+    else {
+      if (frameTimer) { clearTimeout(frameTimer); frameTimer = null; }
+      elCamImg.classList.add("hidden");
+      elCamImg.removeAttribute("src");     /* only stream while the box is open */
+      elCamOff.classList.add("hidden");
+    }
+  }
+  elCamToggle.addEventListener("change", function () { setCam(elCamToggle.checked); });
+  elCamRetry.addEventListener("click", loadStream);
+  elCamLock.addEventListener("click", function () {
+    camLocked = !camLocked;
+    settings.camLock = camLocked;
+    saveSettings();
+    paintLock();
+  });
+  elCamHandle.addEventListener("pointerdown", function (e) {
+    if (camLocked) return;
+    e.preventDefault();
+    dragging = true;
+    dragStartW = camW;
+    dragStartX = e.clientX;
+  });
+  window.addEventListener("pointermove", function (e) {
+    if (!dragging) return;
+    camW = clampCamW(dragStartW - (e.clientX - dragStartX));   /* bottom-left corner */
+    applyCamSize();
+  });
+  ["pointerup", "pointercancel"].forEach(function (t) {
+    window.addEventListener(t, function () {
+      if (!dragging) return;
+      dragging = false;
+      settings.camW = camW;
+      saveSettings();
+    });
+  });
+
+  /* ── temperature trend, drawn by hand (TempChart.tsx) ─────────────────── */
+  function drawChart() {
+    if (tempMode === false) {
+      elChart.classList.add("hidden");
+      elChartEmpty.classList.remove("hidden");
+      elChartEmpty.textContent = "No sensor";
+      elChartSub.textContent = "--";
+      return;
+    }
+    elChartSub.textContent = Math.min(history.length, HISTORY) + " / " + HISTORY;
+    if (history.length < 2) {
+      elChart.classList.add("hidden");
+      elChartEmpty.classList.remove("hidden");
+      elChartEmpty.textContent = "Collecting\u2026";
+      return;
+    }
+    elChart.classList.remove("hidden");
+    elChartEmpty.classList.add("hidden");
+    var w = elChart.clientWidth || 260, h = 92, dpr = window.devicePixelRatio || 1, i;
+    elChart.width = Math.round(w * dpr);
+    elChart.height = Math.round(h * dpr);
+    var g = elChart.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    var lo = Math.min.apply(null, history), hi = Math.max.apply(null, history);
+    if (hi - lo < 1) { hi = lo + 1; lo -= 1; }
+    var padT = 12, innerH = h - padT - 12, last = history.length - 1;
+    function px(n) { return (n / last) * (w - 6) + 3; }
+    function py(v) { return padT + (1 - (v - lo) / (hi - lo)) * innerH; }
+    g.strokeStyle = "#1D2750";
+    g.lineWidth = 1;
+    for (i = 0; i <= 2; i++) {
+      var yy = padT + (i / 2) * innerH;
+      g.beginPath(); g.moveTo(3, yy); g.lineTo(w - 3, yy); g.stroke();
+    }
+    g.beginPath();
+    for (i = 0; i < history.length; i++) { if (i === 0) g.moveTo(px(i), py(history[i])); else g.lineTo(px(i), py(history[i])); }
+    g.lineTo(px(last), padT + innerH);
+    g.lineTo(px(0), padT + innerH);
+    g.closePath();
+    var grad = g.createLinearGradient(0, padT, 0, padT + innerH);
+    grad.addColorStop(0, "rgba(79,200,224,.38)");
+    grad.addColorStop(1, "rgba(79,200,224,0)");
+    g.fillStyle = grad;
+    g.fill();
+    g.beginPath();
+    for (i = 0; i < history.length; i++) { if (i === 0) g.moveTo(px(i), py(history[i])); else g.lineTo(px(i), py(history[i])); }
+    g.strokeStyle = "#4FC8E0";
+    g.lineWidth = 2;
+    g.lineJoin = "round";
+    g.lineCap = "round";
+    g.stroke();
+    g.beginPath();
+    g.arc(px(last), py(history[last]), 3.2, 0, 6.2832);
+    g.fillStyle = "#4FC8E0";
+    g.fill();
+  }
+
+  /* ── settings form ────────────────────────────────────────────────────── */
+  elRobot.value = settings.robot;
+  elCamera.value = settings.camera;
+  elMock.checked = settings.mock;
+  elMockHint.textContent = settings.mock ? "Fake car, no network" : "Live rover over Wi-Fi";
+  elRobot.addEventListener("input", function () {
+    var ok = isHost(elRobot.value);
+    elRobot.classList.toggle("bad", !ok);
+    if (ok) { settings.robot = elRobot.value.trim(); saveSettings(); }
+  });
+  elCamera.addEventListener("input", function () {
+    var ok = isHost(elCamera.value) && elCamera.value.trim() !== "";
+    elCamera.classList.toggle("bad", !ok);
+    if (ok) {
+      settings.camera = elCamera.value.trim();
+      saveSettings();
+      if (camOpen) loadStream();
+    }
+  });
+  elMock.addEventListener("change", function () {
+    settings.mock = elMock.checked;
+    elMockHint.textContent = settings.mock ? "Fake car, no network" : "Live rover over Wi-Fi";
+    saveSettings();
+    status = null;
+    history = [];
+    tempMode = null;
+    link = "connecting";
+    paintConn();
+    paintStatus();
+    drawChart();
+  });
+
+  /* ── mock telemetry (src/robot/mock.ts) ───────────────────────────────── */
+  var mTemp = 24.5, mDist = 120, mLeft = 90, mRight = 90;
+  function walk(v, step, min, max) { return Math.min(max, Math.max(min, v + (Math.random() - 0.5) * 2 * step)); }
+  function mockStatus() {
+    mTemp = walk(mTemp, 0.35, 15, 38);
+    mDist = walk(mDist, 28, 6, 260);
+    mLeft = walk(mLeft, 12, 10, 220);
+    mRight = walk(mRight, 12, 10, 220);
+    var cm = Math.round(mDist);
+    online({
+      distance: cm,
+      blocked: cm <= OBSTACLE_CM,
+      left: Math.round(mLeft), right: Math.round(mRight),
+      temperature: Math.round(mTemp * 10) / 10
+    });
+  }
+
+  /* ── phone-driving safety: every way off-screen stops the car ─────────── */
+  window.addEventListener("blur", safetyStop);
+  window.addEventListener("pagehide", safetyStop);
+  document.addEventListener("visibilitychange", function () { if (document.hidden) safetyStop(); });
+
+  /* ── gesture suppression ──────────────────────────────────────────────── */
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  document.addEventListener("dblclick", function (e) { e.preventDefault(); });
+  document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
+
+  /* ── ambient star field (StarField.tsx, deterministic) ────────────────── */
+  (function stars() {
+    var seed = 0x5eed1a;
+    function rnd() {
+      seed = (seed + 0x6d2b79f5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+    var host = byId("stars"), frag = document.createDocumentFragment();
+    var neb1 = document.createElement("i"); neb1.className = "neb";
+    neb1.style.cssText = "top:-140px;left:-120px;background:var(--cyan);opacity:.025";
+    var neb2 = document.createElement("i"); neb2.className = "neb";
+    neb2.style.cssText = "bottom:-160px;right:-130px;background:var(--purple);opacity:.03";
+    frag.appendChild(neb1); frag.appendChild(neb2);
+    var tints = ["var(--text)", "var(--text)", "var(--cyan)", "var(--purple)", "var(--dim)"];
+    for (var i = 0; i < 90; i++) {
+      var size = rnd() < 0.82 ? 1 : 2;
+      var tint = tints[Math.floor(rnd() * tints.length)];
+      var star = document.createElement("i");
+      star.style.cssText = "top:" + Math.round(rnd() * 1000) / 10 + "%;left:" + Math.round(rnd() * 1000) / 10 +
+        "%;width:" + size + "px;height:" + size + "px;background:" + tint + ";opacity:" + (0.05 + rnd() * 0.2);
+      frag.appendChild(star);
+    }
+    host.appendChild(frag);
+  })();
+
+  /* ── boot ─────────────────────────────────────────────────────────────── */
+  paintConn();
+  paintGear();
+  paintLock();
+  paintPad();
+  paintStatus();
+  applyCamSize();
+  drawChart();
+  poll();
+})();
+</script>
+</body>
+</html>

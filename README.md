@@ -100,7 +100,7 @@ field name or a timing.
 | `STATUS_POLL_MS` | `500` | `/status` poll period |
 | `STATUS_TIMEOUT_MS` | `1500` | A slower answer counts as a failure |
 | `FAILURES_BEFORE_OFFLINE` | `2` | Consecutive failures before the link reads red |
-| `OBSTACLE_WARNING_CM` | `15` | Range at which the red edge glow also appears |
+| `OBSTACLE_WARNING_CM` | `30` | Range at which the red edge glow also appears |
 | `HISTORY_SIZE` | `60` | Temperature readings kept for the chart (mock mode only) |
 | `CAMERA_BOX_DEFAULT_WIDTH` | `240` | Floating camera width, `4:3` aspect preserved |
 | `CAMERA_BOX_MIN_WIDTH` / `..._MAX_*_RATIO` | `140` / `0.5` / `0.45` | Resize clamps |
